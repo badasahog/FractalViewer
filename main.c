@@ -22,7 +22,9 @@
 
 #ifdef _DEBUG
 #include <dxgidebug.h>
+#include <d3d12sdklayers.h>
 #endif
+
 
 #include <stdint.h>
 #include <stdio.h>
@@ -72,6 +74,7 @@ inline void THROW_ON_FAIL_IMPL(HRESULT hr, int line)
 			WriteConsoleA(ConsoleHandle, "an error occured: ", 18, nullptr, nullptr);
 			WriteConsoleW(ConsoleHandle, messageBuffer, formattedErrorLength, nullptr, nullptr);
 			WriteConsoleA(ConsoleHandle, "\n", 1, nullptr, nullptr);
+			LocalFree(messageBuffer);
 		}
 
 		char buffer[50];
@@ -233,6 +236,9 @@ int main()
 
 	THROW_ON_FALSE(QueryPerformanceFrequency(&ProcessorFrequency));
 
+
+	HICON Icon = LoadIconW(nullptr, IDI_APPLICATION);
+	HCURSOR Cursor = LoadCursorW(nullptr, IDC_ARROW);
 	const LPCTSTR WindowClassName = L"ComputeShaders";
 
 	WNDCLASSEXW WindowClass = { 0 };
@@ -242,12 +248,12 @@ int main()
 	WindowClass.cbClsExtra = 0;
 	WindowClass.cbWndExtra = 0;
 	WindowClass.hInstance = Instance;
-	WindowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-	WindowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+	WindowClass.hIcon = Icon;
+	WindowClass.hCursor = Cursor;
 	WindowClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 2);
 	WindowClass.lpszMenuName = nullptr;
 	WindowClass.lpszClassName = WindowClassName;
-	WindowClass.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
+	WindowClass.hIconSm = Icon;
 
 	ATOM WindowClassAtom = RegisterClassExW(&WindowClass);
 	if (WindowClassAtom == 0)
@@ -461,6 +467,8 @@ int main()
 		THROW_ON_FAIL(IDXGIFactory6_CreateSwapChain(Factory, (IUnknown*)DirectCommandQueue, &SwapchainDesc, &tempSwapChain));
 
 		THROW_ON_FAIL(IDXGISwapChain_QueryInterface(tempSwapChain, &IID_IDXGISwapChain4, &Swapchain));
+
+		THROW_ON_FAIL(IDXGISwapChain_Release(tempSwapChain));
 
 		THROW_ON_FAIL(IDXGIFactory6_MakeWindowAssociation(Factory, Window, DXGI_MWA_NO_ALT_ENTER));
 	}
@@ -809,8 +817,19 @@ int main()
 	THROW_ON_FAIL(ID3D12Resource_Release(MinimapFrameBuffer));
 	THROW_ON_FAIL(ID3D12Resource_Release(MainFrameBuffer));
 
+	for (int i = 0; i < BUFFER_COUNT; i++)
+	{
+		THROW_ON_FAIL(ID3D12Resource_Release(SwapchainBuffers[i]));
+	}
+
 	THROW_ON_FAIL(IDXGISwapChain4_Release(Swapchain));
+
 	THROW_ON_FALSE(CloseHandle(FenceEvent));
+
+	for (int i = 0; i < BUFFER_COUNT; i++)
+	{
+		THROW_ON_FAIL(ID3D12Fence_Release(ComputeFinishedFence[i]));
+	}
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
@@ -820,6 +839,11 @@ int main()
 	THROW_ON_FAIL(ID3D12GraphicsCommandList_Release(DirectCommandList));
 	THROW_ON_FAIL(ID3D12CommandAllocator_Release(DirectCommondAllocator));
 	THROW_ON_FAIL(ID3D12CommandQueue_Release(DirectCommandQueue));
+
+	THROW_ON_FAIL(ID3D12GraphicsCommandList_Release(ComputeCommandList));
+	THROW_ON_FAIL(ID3D12CommandAllocator_Release(ComputeCommondAllocator));
+	THROW_ON_FAIL(ID3D12CommandQueue_Release(ComputeCommandQueue));
+
 	THROW_ON_FAIL(ID3D12DescriptorHeap_Release(DescriptorHeap));
 
 #ifdef _DEBUG
@@ -827,6 +851,7 @@ int main()
 #endif
 
 	THROW_ON_FAIL(ID3D12Device_Release(Device));
+
 	THROW_ON_FAIL(IDXGIAdapter1_Release(Adapter));
 
 #ifdef _DEBUG
@@ -836,6 +861,10 @@ int main()
 	THROW_ON_FAIL(IDXGIFactory6_Release(Factory));
 
 	THROW_ON_FALSE(UnregisterClassW(WindowClassName, Instance));
+
+	THROW_ON_FALSE(DestroyCursor(Cursor));
+	THROW_ON_FALSE(DestroyIcon(Icon));
+
 	return 0;
 }
 
