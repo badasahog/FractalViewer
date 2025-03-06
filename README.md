@@ -4,7 +4,7 @@ A simple fractal viewer written in C
 ![image](https://github.com/user-attachments/assets/7a4902be-1fff-46e1-b04a-b070ac1f8055)
 
 
-(C) 2024 badasahog. All Rights Reserved
+(C) 2024-2025 badasahog. All Rights Reserved
 
 The above copyright notice shall be included in
 all copies or substantial portions of the Software.
