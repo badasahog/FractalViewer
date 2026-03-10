@@ -1,5 +1,5 @@
 /*
-* (C) 2024-2025 badasahog. All Rights Reserved
+* (C) 2024-2026 badasahog. All Rights Reserved
 * 
 * The above copyright notice shall be included in
 * all copies or substantial portions of the Software.
@@ -145,7 +145,7 @@ struct DxObjects
 {
 	ID3D12PipelineState* PipelineStates[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
 	ID3D12RootSignature* RootSignatures[RENDER_MODE_COUNT];
-	IDXGISwapChain4* Swapchain;
+	IDXGISwapChain4* SwapChain;
 	ID3D12Resource* SwapchainBuffers[BUFFER_COUNT];
 
 	ID3D12CommandQueue* DirectCommandQueue;
@@ -168,26 +168,19 @@ struct DxObjects
 
 	UINT8* StationaryCbCpuPtr[BUFFER_COUNT];
 	UINT8* MovableCbCpuPtr[BUFFER_COUNT];
-};
 
-struct SyncObjects
-{
+
 	ID3D12Fence* ComputeFinishedFence[BUFFER_COUNT];
 	ID3D12Fence* AllClearFence[BUFFER_COUNT];
 	UINT64 FenceValue[BUFFER_COUNT];
 	HANDLE FenceEvent;
-};
-
-struct WindowProcPayload
-{
-	struct DxObjects* DxObjects;
-	struct SyncObjects* SyncObjects;
+	int FrameIndex;
 };
 
 LRESULT CALLBACK PreInitProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK IdleProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam);
-inline void WaitForPreviousFrame(const UINT SwapchainBufferIndex, struct DxObjects* restrict DxObjects, struct SyncObjects* restrict SyncObjects);
+inline void WaitForPreviousFrame(struct DxObjects* restrict DxObjects);
 
 int main()
 {
@@ -337,38 +330,36 @@ int main()
 	THROW_ON_FAIL(ID3D12Device10_CreateCommandList(Device, 0, D3D12_COMMAND_LIST_TYPE_COMPUTE, DxObjects.ComputeCommandAllocator, NULL, &IID_ID3D12GraphicsCommandList7, &DxObjects.ComputeCommandList));
 	THROW_ON_FAIL(ID3D12GraphicsCommandList7_Close(DxObjects.ComputeCommandList));
 
-	struct SyncObjects SyncObjects = { 0 };
-
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
-		SyncObjects.FenceValue[i] = 0;
-		THROW_ON_FAIL(ID3D12Device10_CreateFence(Device, SyncObjects.FenceValue[i], D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, &SyncObjects.ComputeFinishedFence[i]));
+		DxObjects.FenceValue[i] = 0;
+		THROW_ON_FAIL(ID3D12Device10_CreateFence(Device, DxObjects.FenceValue[i], D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, &DxObjects.ComputeFinishedFence[i]));
 
 #ifdef _DEBUG
 		wchar_t buffer[17];
 		_snwprintf_s(buffer, ARRAYSIZE(buffer), _TRUNCATE, L"Compute Fence %i", i);
-		THROW_ON_FAIL(ID3D12Fence_SetName(SyncObjects.ComputeFinishedFence[i], buffer));
+		THROW_ON_FAIL(ID3D12Fence_SetName(DxObjects.ComputeFinishedFence[i], buffer));
 #endif
 	}
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
-		THROW_ON_FAIL(ID3D12Device10_CreateFence(Device, SyncObjects.FenceValue[i], D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, &SyncObjects.AllClearFence[i]));
+		THROW_ON_FAIL(ID3D12Device10_CreateFence(Device, DxObjects.FenceValue[i], D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, &DxObjects.AllClearFence[i]));
 
 #ifdef _DEBUG
 		wchar_t buffer[9];
 		_snwprintf_s(buffer, ARRAYSIZE(buffer), _TRUNCATE, L"Fence %i", i);
-		THROW_ON_FAIL(ID3D12Fence_SetName(SyncObjects.AllClearFence[i], buffer));
+		THROW_ON_FAIL(ID3D12Fence_SetName(DxObjects.AllClearFence[i], buffer));
 #endif
 	}
 
-	SyncObjects.FenceEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
-	VALIDATE_HANDLE(SyncObjects.FenceEvent);
+	DxObjects.FenceEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+	VALIDATE_HANDLE(DxObjects.FenceEvent);
 
 	{
 		DXGI_SWAP_CHAIN_DESC SwapchainDesc = { 0 };
-		SwapchainDesc.BufferDesc.Width = WindowWidth;
-		SwapchainDesc.BufferDesc.Height = WindowHeight;
+		SwapchainDesc.BufferDesc.Width = 1;
+		SwapchainDesc.BufferDesc.Height = 1;
 		SwapchainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		SwapchainDesc.SampleDesc.Count = 1;
 		SwapchainDesc.SampleDesc.Quality = 0;
@@ -379,10 +370,10 @@ int main()
 		SwapchainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 		SwapchainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
 
-		IDXGISwapChain* tempSwapChain;
-		THROW_ON_FAIL(IDXGIFactory6_CreateSwapChain(Factory, DxObjects.DirectCommandQueue, &SwapchainDesc, &tempSwapChain));
-		THROW_ON_FAIL(IDXGISwapChain_QueryInterface(tempSwapChain, &IID_IDXGISwapChain4, &DxObjects.Swapchain));
-		THROW_ON_FAIL(IDXGISwapChain_Release(tempSwapChain));
+		IDXGISwapChain* TempSwapChain;
+		THROW_ON_FAIL(IDXGIFactory6_CreateSwapChain(Factory, DxObjects.DirectCommandQueue, &SwapchainDesc, &TempSwapChain));
+		THROW_ON_FAIL(IDXGISwapChain_QueryInterface(TempSwapChain, &IID_IDXGISwapChain4, &DxObjects.SwapChain));
+		THROW_ON_FAIL(IDXGISwapChain_Release(TempSwapChain));
 	}
 
 	THROW_ON_FAIL(IDXGIFactory6_MakeWindowAssociation(Factory, Window, DXGI_MWA_NO_ALT_ENTER));
@@ -390,7 +381,7 @@ int main()
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
-		THROW_ON_FAIL(IDXGISwapChain4_GetBuffer(DxObjects.Swapchain, i, &IID_ID3D12Resource, &DxObjects.SwapchainBuffers[i]));
+		THROW_ON_FAIL(IDXGISwapChain4_GetBuffer(DxObjects.SwapChain, i, &IID_ID3D12Resource, &DxObjects.SwapchainBuffers[i]));
 
 #ifdef _DEBUG
 		wchar_t buffer[20];
@@ -400,72 +391,72 @@ int main()
 	}
 
 	{
-		D3D12_DESCRIPTOR_RANGE1 descRange = { 0 };
-		descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;// u0
-		descRange.NumDescriptors = 1;
-		descRange.BaseShaderRegister = 0;
-		descRange.RegisterSpace = 0;
-		descRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
-		descRange.OffsetInDescriptorsFromTableStart = 0;
+		D3D12_DESCRIPTOR_RANGE1 DescRange = { 0 };
+		DescRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;// u0
+		DescRange.NumDescriptors = 1;
+		DescRange.BaseShaderRegister = 0;
+		DescRange.RegisterSpace = 0;
+		DescRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+		DescRange.OffsetInDescriptorsFromTableStart = 0;
 
-		D3D12_ROOT_PARAMETER1 rootParameters[2] = { 0 };
-		rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
-		rootParameters[0].DescriptorTable.pDescriptorRanges = &descRange;
-		rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		D3D12_ROOT_PARAMETER1 RootParameters[2] = { 0 };
+		RootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		RootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
+		RootParameters[0].DescriptorTable.pDescriptorRanges = &DescRange;
+		RootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-		rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-		rootParameters[1].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
-		rootParameters[1].Descriptor.ShaderRegister = 0;
-		rootParameters[1].Descriptor.RegisterSpace = 0;
-		rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+		RootParameters[1].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+		RootParameters[1].Descriptor.ShaderRegister = 0;
+		RootParameters[1].Descriptor.RegisterSpace = 0;
+		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-		D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDescription = { 0 };
-		rootSignatureDescription.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
-		rootSignatureDescription.Desc_1_1.NumParameters = ARRAYSIZE(rootParameters);
-		rootSignatureDescription.Desc_1_1.pParameters = rootParameters;
-		rootSignatureDescription.Desc_1_1.NumStaticSamplers = 0;
-		rootSignatureDescription.Desc_1_1.pStaticSamplers = NULL;
-		rootSignatureDescription.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+		D3D12_VERSIONED_ROOT_SIGNATURE_DESC RootSignatureDescription = { 0 };
+		RootSignatureDescription.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
+		RootSignatureDescription.Desc_1_1.NumParameters = ARRAYSIZE(RootParameters);
+		RootSignatureDescription.Desc_1_1.pParameters = RootParameters;
+		RootSignatureDescription.Desc_1_1.NumStaticSamplers = 0;
+		RootSignatureDescription.Desc_1_1.pStaticSamplers = NULL;
+		RootSignatureDescription.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-		ID3D10Blob* rootsig;
-		THROW_ON_FAIL(D3D12SerializeVersionedRootSignature(&rootSignatureDescription, &rootsig, NULL));
-		THROW_ON_FAIL(ID3D12Device10_CreateRootSignature(Device, 0, ID3D10Blob_GetBufferPointer(rootsig), ID3D10Blob_GetBufferSize(rootsig), &IID_ID3D12RootSignature, &DxObjects.RootSignatures[RENDER_MODE_JULIA]));
-		THROW_ON_FAIL(ID3D10Blob_Release(rootsig));
+		ID3D10Blob* Rootsig;
+		THROW_ON_FAIL(D3D12SerializeVersionedRootSignature(&RootSignatureDescription, &Rootsig, NULL));
+		THROW_ON_FAIL(ID3D12Device10_CreateRootSignature(Device, 0, ID3D10Blob_GetBufferPointer(Rootsig), ID3D10Blob_GetBufferSize(Rootsig), &IID_ID3D12RootSignature, &DxObjects.RootSignatures[RENDER_MODE_JULIA]));
+		THROW_ON_FAIL(ID3D10Blob_Release(Rootsig));
 	}
 
 	{
-		D3D12_DESCRIPTOR_RANGE1 descRange[2] = { 0 };
-		descRange[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;// u0
-		descRange[0].NumDescriptors = 1;
-		descRange[0].BaseShaderRegister = 0;
-		descRange[0].RegisterSpace = 0;
-		descRange[0].Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
-		descRange[0].OffsetInDescriptorsFromTableStart = 0;
+		D3D12_DESCRIPTOR_RANGE1 DescRange[2] = { 0 };
+		DescRange[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;// u0
+		DescRange[0].NumDescriptors = 1;
+		DescRange[0].BaseShaderRegister = 0;
+		DescRange[0].RegisterSpace = 0;
+		DescRange[0].Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+		DescRange[0].OffsetInDescriptorsFromTableStart = 0;
 
-		descRange[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;// t0
-		descRange[1].NumDescriptors = 1;
-		descRange[1].BaseShaderRegister = 0;
-		descRange[1].RegisterSpace = 0;
-		descRange[1].Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
-		descRange[1].OffsetInDescriptorsFromTableStart = 0;
+		DescRange[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;// t0
+		DescRange[1].NumDescriptors = 1;
+		DescRange[1].BaseShaderRegister = 0;
+		DescRange[1].RegisterSpace = 0;
+		DescRange[1].Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+		DescRange[1].OffsetInDescriptorsFromTableStart = 0;
 
-		D3D12_ROOT_PARAMETER1 rootParameters[3] = { 0 };
-		rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
-		rootParameters[0].DescriptorTable.pDescriptorRanges = &descRange[0];
-		rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		D3D12_ROOT_PARAMETER1 RootParameters[3] = { 0 };
+		RootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		RootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
+		RootParameters[0].DescriptorTable.pDescriptorRanges = &DescRange[0];
+		RootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-		rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-		rootParameters[1].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
-		rootParameters[1].Descriptor.ShaderRegister = 0;
-		rootParameters[1].Descriptor.RegisterSpace = 0;
-		rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		RootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+		RootParameters[1].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+		RootParameters[1].Descriptor.ShaderRegister = 0;
+		RootParameters[1].Descriptor.RegisterSpace = 0;
+		RootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-		rootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		rootParameters[2].DescriptorTable.NumDescriptorRanges = 1;
-		rootParameters[2].DescriptorTable.pDescriptorRanges = &descRange[1];
-		rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		RootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		RootParameters[2].DescriptorTable.NumDescriptorRanges = 1;
+		RootParameters[2].DescriptorTable.pDescriptorRanges = &DescRange[1];
+		RootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 		D3D12_STATIC_SAMPLER_DESC Sampler = { 0 };
 		Sampler.Filter = D3D12_FILTER_ANISOTROPIC;
@@ -482,18 +473,18 @@ int main()
 		Sampler.RegisterSpace = 0;
 		Sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-		D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDescription = { 0 };
-		rootSignatureDescription.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
-		rootSignatureDescription.Desc_1_1.NumParameters = ARRAYSIZE(rootParameters);
-		rootSignatureDescription.Desc_1_1.pParameters = rootParameters;
-		rootSignatureDescription.Desc_1_1.NumStaticSamplers = 1;
-		rootSignatureDescription.Desc_1_1.pStaticSamplers = &Sampler;
-		rootSignatureDescription.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+		D3D12_VERSIONED_ROOT_SIGNATURE_DESC RootSignatureDescription = { 0 };
+		RootSignatureDescription.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
+		RootSignatureDescription.Desc_1_1.NumParameters = ARRAYSIZE(RootParameters);
+		RootSignatureDescription.Desc_1_1.pParameters = RootParameters;
+		RootSignatureDescription.Desc_1_1.NumStaticSamplers = 1;
+		RootSignatureDescription.Desc_1_1.pStaticSamplers = &Sampler;
+		RootSignatureDescription.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
-		ID3D10Blob* rootsig;
-		THROW_ON_FAIL(D3D12SerializeVersionedRootSignature(&rootSignatureDescription, &rootsig, NULL));
-		THROW_ON_FAIL(ID3D12Device10_CreateRootSignature(Device, 0, ID3D10Blob_GetBufferPointer(rootsig), ID3D10Blob_GetBufferSize(rootsig), &IID_ID3D12RootSignature, &DxObjects.RootSignatures[RENDER_MODE_BASE]));
-		THROW_ON_FAIL(ID3D10Blob_Release(rootsig));
+		ID3D10Blob* RootSig;
+		THROW_ON_FAIL(D3D12SerializeVersionedRootSignature(&RootSignatureDescription, &RootSig, NULL));
+		THROW_ON_FAIL(ID3D12Device10_CreateRootSignature(Device, 0, ID3D10Blob_GetBufferPointer(RootSig), ID3D10Blob_GetBufferSize(RootSig), &IID_ID3D12RootSignature, &DxObjects.RootSignatures[RENDER_MODE_BASE]));
+		THROW_ON_FAIL(ID3D10Blob_Release(RootSig));
 	}
 
 	for (int i = 0; i < FRACTAL_SET_COUNT; i++)
@@ -576,11 +567,7 @@ int main()
 	DispatchMessageW(&(MSG) {
 		.hwnd = Window,
 		.message = WM_INIT,
-		.wParam = (WPARAM)&(struct WindowProcPayload)
-		{
-			.DxObjects = &DxObjects,
-			.SyncObjects = &SyncObjects
-		},
+		.wParam = (WPARAM)&DxObjects,
 		.lParam = 0
 	});
 
@@ -602,7 +589,7 @@ int main()
 		}
 	}
 
-	WaitForPreviousFrame(IDXGISwapChain4_GetCurrentBackBufferIndex(DxObjects.Swapchain), &DxObjects, &SyncObjects);
+	WaitForPreviousFrame(&DxObjects);
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
@@ -630,18 +617,18 @@ int main()
 		THROW_ON_FAIL(ID3D12Resource_Release(DxObjects.SwapchainBuffers[i]));
 	}
 
-	THROW_ON_FAIL(IDXGISwapChain4_Release(DxObjects.Swapchain));
+	THROW_ON_FAIL(IDXGISwapChain4_Release(DxObjects.SwapChain));
 
-	THROW_ON_FALSE(CloseHandle(SyncObjects.FenceEvent));
+	THROW_ON_FALSE(CloseHandle(DxObjects.FenceEvent));
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
-		THROW_ON_FAIL(ID3D12Fence_Release(SyncObjects.ComputeFinishedFence[i]));
+		THROW_ON_FAIL(ID3D12Fence_Release(DxObjects.ComputeFinishedFence[i]));
 	}
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
-		THROW_ON_FAIL(ID3D12Fence_Release(SyncObjects.AllClearFence[i]));
+		THROW_ON_FAIL(ID3D12Fence_Release(DxObjects.AllClearFence[i]));
 	}
 
 	THROW_ON_FAIL(ID3D12GraphicsCommandList7_Release(DxObjects.DirectCommandList));
@@ -694,19 +681,22 @@ LRESULT CALLBACK PreInitProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lP
 	return 0;
 }
 
-LRESULT CALLBACK IdleProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK IdleProc(HWND Window, UINT message, WPARAM wParam, LPARAM lParam)
 {
-	switch (Message)
+	switch (message)
 	{
-	case WM_ACTIVATE:
-		THROW_ON_FALSE(SetWindowLongPtrW(Window, GWLP_WNDPROC, (LONG_PTR)WndProc) != 0);
+	case WM_PAINT:
+		Sleep(25);
+		break;
+	case WM_SIZE:
+		if (wParam == SIZE_RESTORED)
+			THROW_ON_FALSE(SetWindowLongPtrW(Window, GWLP_WNDPROC, (LONG_PTR)WndProc) != 0);
 		break;
 	case WM_DESTROY:
-		THROW_ON_FALSE(DestroyWindow(Window));
 		PostQuitMessage(0);
 		break;
 	default:
-		return DefWindowProcW(Window, Message, wParam, lParam);
+		return DefWindowProcW(Window, message, wParam, lParam);
 	}
 	return 0;
 }
@@ -725,7 +715,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 	static uint32_t WindowHeight;
 
 	static LARGE_INTEGER ProcessorFrequency;
-	static LONGLONG tickCount = 0;
+	static LONGLONG TickCount = 0;
 
 	static bool bFullScreen = false;
 	static bool bVsync = false;
@@ -733,34 +723,32 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 	static enum RenderMode CurrentRenderMode = RENDER_MODE_BASE;
 	static enum FractalSet CurrentFractalSet = FRACTAL_SET_MANDELBROT;
 	
-	static struct DxObjects* DxObjects;
-	static struct SyncObjects* SyncObjects;
+	static struct DxObjects *restrict DxObjects;
 
-	static struct ConstantBufferData defaultCbData = { 0 };
-	static struct ConstantBufferData cbData = { 0 };
+	static struct ConstantBufferData DefaultCbData = { 0 };
+	static struct ConstantBufferData CbData = { 0 };
 
 	switch (Message)
 	{
 	case WM_INIT:
 		QueryPerformanceFrequency(&ProcessorFrequency);
 
-		defaultCbData.WindowPos[0] = 4.f;
-		defaultCbData.WindowPos[1] = 2.25;
-		defaultCbData.WindowPos[2] = -.65;
-		defaultCbData.WindowPos[3] = 0;
+		DefaultCbData.WindowPos[0] = 4.f;
+		DefaultCbData.WindowPos[1] = 2.25;
+		DefaultCbData.WindowPos[2] = -.65;
+		DefaultCbData.WindowPos[3] = 0;
 
-		defaultCbData.MaxIterations[2] = 700;
-		defaultCbData.MaxIterations[3] = 0;
+		DefaultCbData.MaxIterations[2] = 700;
+		DefaultCbData.MaxIterations[3] = 0;
 
-		MEMCPY_VERIFY(memcpy_s(&cbData, sizeof(struct ConstantBufferData), &defaultCbData, sizeof(struct ConstantBufferData)));
+		MEMCPY_VERIFY(memcpy_s(&CbData, sizeof(struct ConstantBufferData), &DefaultCbData, sizeof(struct ConstantBufferData)));
 		
-		DxObjects = ((struct WindowProcPayload*)wParam)->DxObjects;
-		SyncObjects = ((struct WindowProcPayload*)wParam)->SyncObjects;
+		DxObjects = ((struct DxObjects*)wParam);
 		break;
 	case WM_LBUTTONDOWN:
 		if (CurrentRenderMode == RENDER_MODE_JULIA)
 		{
-			MEMCPY_VERIFY(memcpy_s(&cbData, sizeof(struct ConstantBufferData), &defaultCbData, sizeof(struct ConstantBufferData)));
+			MEMCPY_VERIFY(memcpy_s(&CbData, sizeof(struct ConstantBufferData), &DefaultCbData, sizeof(struct ConstantBufferData)));
 		}
 		mouseClicked = true;
 		break;
@@ -805,10 +793,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			{
 				CurrentRenderMode = RENDER_MODE_JULIA;
 				MEMCPY_VERIFY(memcpy_s(
-					&cbData,
+					&CbData,
 					sizeof(struct ConstantBufferData),
-					&defaultCbData,
-					sizeof(struct ConstantBufferData) - sizeof(cbData.JuliaPos)
+					&DefaultCbData,
+					sizeof(struct ConstantBufferData) - sizeof(CbData.JuliaPos)
 				));
 
 				THROW_ON_FAIL(ID3D12Device10_Evict(Device, 1, &DxObjects->MinimapFrameBuffer));
@@ -875,20 +863,20 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 		break;
 	case WM_SIZE:
 	{
-		WaitForPreviousFrame(IDXGISwapChain4_GetCurrentBackBufferIndex(DxObjects->Swapchain), DxObjects, SyncObjects);
+		WaitForPreviousFrame(DxObjects);
 		if (wParam == SIZE_MINIMIZED)
 		{
 			THROW_ON_FALSE(SetWindowLongPtrW(Window, GWLP_WNDPROC, (LONG_PTR)IdleProc) != 0);
 			break;
 		}
 
-		defaultCbData.MaxIterations[0] = cbData.MaxIterations[0] = WindowWidth = LOWORD(lParam);
-		defaultCbData.MaxIterations[1] = cbData.MaxIterations[1] = WindowHeight = HIWORD(lParam);
+		DefaultCbData.MaxIterations[0] = CbData.MaxIterations[0] = WindowWidth = LOWORD(lParam);
+		DefaultCbData.MaxIterations[1] = CbData.MaxIterations[1] = WindowHeight = HIWORD(lParam);
 
 		for (int i = 0; i < BUFFER_COUNT; i++)
 		{
-			MEMCPY_VERIFY(memcpy_s(DxObjects->StationaryCbCpuPtr[i], sizeof(struct ConstantBufferData), &cbData, sizeof(struct ConstantBufferData)));
-			MEMCPY_VERIFY(memcpy_s(DxObjects->MovableCbCpuPtr[i], sizeof(struct ConstantBufferData), &cbData, sizeof(struct ConstantBufferData)));
+			MEMCPY_VERIFY(memcpy_s(DxObjects->StationaryCbCpuPtr[i], sizeof(struct ConstantBufferData), &CbData, sizeof(struct ConstantBufferData)));
+			MEMCPY_VERIFY(memcpy_s(DxObjects->MovableCbCpuPtr[i], sizeof(struct ConstantBufferData), &CbData, sizeof(struct ConstantBufferData)));
 		}
 		
 		for (int i = 0; i < BUFFER_COUNT; i++)
@@ -897,7 +885,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 		}
 
 		THROW_ON_FAIL(IDXGISwapChain4_ResizeBuffers(
-			DxObjects->Swapchain,
+			DxObjects->SwapChain,
 			BUFFER_COUNT,
 			WindowWidth,
 			WindowHeight,
@@ -907,7 +895,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 
 		for (int i = 0; i < BUFFER_COUNT; i++)
 		{
-			THROW_ON_FAIL(IDXGISwapChain4_GetBuffer(DxObjects->Swapchain, i, &IID_ID3D12Resource, &DxObjects->SwapchainBuffers[i]));
+			THROW_ON_FAIL(IDXGISwapChain4_GetBuffer(DxObjects->SwapChain, i, &IID_ID3D12Resource, &DxObjects->SwapchainBuffers[i]));
 
 #ifdef _DEBUG
 			wchar_t buffer[20];
@@ -988,9 +976,9 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 		//minimap
 		{
 			D3D12_SHADER_RESOURCE_VIEW_DESC SrvDesc = { 0 };
-			SrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 			SrvDesc.Format = DXGI_FORMAT_UNKNOWN;
 			SrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			SrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 			SrvDesc.Texture2D.MipLevels = 1;
 
 			ID3D12Device10_CreateShaderResourceView(
@@ -1004,14 +992,14 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 	}
 	break;
 	case WM_PAINT:
-		const UINT SwapchainBufferIndex = IDXGISwapChain4_GetCurrentBackBufferIndex(DxObjects->Swapchain);
-		SyncObjects->FenceValue[SwapchainBufferIndex]++;
+		WaitForPreviousFrame(DxObjects);
+		DxObjects->FenceValue[DxObjects->FrameIndex]++;
 
-		LONGLONG tickCountNow;
-		QueryPerformanceCounter(&tickCountNow);
-		ULONGLONG tickCountDelta = tickCountNow - tickCount;
+		LONGLONG TickCountNow;
+		QueryPerformanceCounter(&TickCountNow);
+		ULONGLONG TickCountDelta = TickCountNow - TickCount;
 
-		tickCount = tickCountNow;
+		TickCount = TickCountNow;
 
 		THROW_ON_FAIL(ID3D12CommandAllocator_Reset(DxObjects->DirectCommandAllocator));
 		THROW_ON_FAIL(ID3D12GraphicsCommandList7_Reset(DxObjects->DirectCommandList, DxObjects->DirectCommandAllocator, NULL));
@@ -1021,49 +1009,49 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 
 		if (up || down || left || right || in || out || mouseClicked)
 		{
-			const float elapsedTime = (tickCountDelta / ((double)ProcessorFrequency.QuadPart)) * .5f;
+			const float ElapsedTime = (TickCountDelta / ((double)ProcessorFrequency.QuadPart)) * .5f;
 			const float ScaleSpeed = 1.f;
 
-			const float zoom = out ? 1.f : (in ? -1.f : 0.f);
+			const float Zoom = out ? 1.f : (in ? -1.f : 0.f);
 			const float x = right ? 1.f : (left ? -1.f : 0.f);
 			const float y = up ? 1.f : (down ? -1.f : 0.f);
 
-			const float WindowScale = 1.0f + zoom * ScaleSpeed * elapsedTime;
-			cbData.WindowPos[0] *= WindowScale;
-			cbData.WindowPos[1] *= WindowScale;
-			cbData.WindowPos[2] += cbData.WindowPos[0] * x * elapsedTime * 0.5f;
-			cbData.WindowPos[3] += cbData.WindowPos[1] * y * elapsedTime * 0.5f;
+			const float WindowScale = 1.0f + Zoom * ScaleSpeed * ElapsedTime;
+			CbData.WindowPos[0] *= WindowScale;
+			CbData.WindowPos[1] *= WindowScale;
+			CbData.WindowPos[2] += CbData.WindowPos[0] * x * ElapsedTime * 0.5f;
+			CbData.WindowPos[3] += CbData.WindowPos[1] * y * ElapsedTime * 0.5f;
 
-			cbData.WindowPos[2] = fmax(fmin(2.0f, cbData.WindowPos[2]), -3.0f);
-			cbData.WindowPos[3] = fmax(fmin(1.8f, cbData.WindowPos[3]), -1.8f);
+			CbData.WindowPos[2] = fmax(fmin(2.0f, CbData.WindowPos[2]), -3.0f);
+			CbData.WindowPos[3] = fmax(fmin(1.8f, CbData.WindowPos[3]), -1.8f);
 		}
 
 		if (mouseClicked)
 		{
-			POINT newCursorPos;
-			THROW_ON_FALSE(GetCursorPos(&newCursorPos));
-			THROW_ON_FALSE(ScreenToClient(Window, &newCursorPos));
+			POINT NewCursorPos;
+			THROW_ON_FALSE(GetCursorPos(&NewCursorPos));
+			THROW_ON_FALSE(ScreenToClient(Window, &NewCursorPos));
 
-			float cx = ((float)newCursorPos.x / cbData.MaxIterations[0]) * 1 + -0.5f;
-			cx = cx * cbData.WindowPos[0] + cbData.WindowPos[2];
+			float cx = ((float)NewCursorPos.x / CbData.MaxIterations[0]) * 1 + -0.5f;
+			cx = cx * CbData.WindowPos[0] + CbData.WindowPos[2];
 
-			float cy = ((float)newCursorPos.y / cbData.MaxIterations[1]) * -1 + 0.5f;
-			cy = cy * cbData.WindowPos[1] + cbData.WindowPos[3];
+			float cy = ((float)NewCursorPos.y / CbData.MaxIterations[1]) * -1 + 0.5f;
+			cy = cy * CbData.WindowPos[1] + CbData.WindowPos[3];
 
-			cbData.JuliaPos[0] = cx;
-			cbData.JuliaPos[1] = cy;
+			CbData.JuliaPos[0] = cx;
+			CbData.JuliaPos[1] = cy;
 		}
 
 		//update the primary screen location
-		MEMCPY_VERIFY(memcpy_s(DxObjects->MovableCbCpuPtr[SwapchainBufferIndex], sizeof(struct ConstantBufferData), &cbData, sizeof(struct ConstantBufferData)));
+		MEMCPY_VERIFY(memcpy_s(DxObjects->MovableCbCpuPtr[DxObjects->FrameIndex], sizeof(struct ConstantBufferData), &CbData, sizeof(struct ConstantBufferData)));
 
 		if (CurrentRenderMode == RENDER_MODE_BASE)
 		{
 			MEMCPY_VERIFY(memcpy_s(
-				&((struct ConstantBufferData*)DxObjects->StationaryCbCpuPtr[SwapchainBufferIndex])->JuliaPos,
-				sizeof(cbData.JuliaPos),
-				&cbData.JuliaPos,
-				sizeof(cbData.JuliaPos)
+				&((struct ConstantBufferData*)DxObjects->StationaryCbCpuPtr[DxObjects->FrameIndex])->JuliaPos,
+				sizeof(CbData.JuliaPos),
+				&CbData.JuliaPos,
+				sizeof(CbData.JuliaPos)
 			));
 		}
 
@@ -1073,7 +1061,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			ID3D12GraphicsCommandList7_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_JULIA]);
 			ID3D12GraphicsCommandList7_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
 
-			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->StationaryConstantBufferPtr[SwapchainBufferIndex]);
+			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->StationaryConstantBufferPtr[DxObjects->FrameIndex]);
 			
 			//render julia to Minimap
 			ID3D12GraphicsCommandList7_SetPipelineState(DxObjects->ComputeCommandList, DxObjects->PipelineStates[CurrentFractalSet][FRACTAL_TYPE_JULIA]);
@@ -1103,7 +1091,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			//render mandelbrot
 			ID3D12GraphicsCommandList7_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_BASE]);
 
-			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[SwapchainBufferIndex]);
+			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[DxObjects->FrameIndex]);
 
 			ID3D12GraphicsCommandList7_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
 			ID3D12GraphicsCommandList7_SetPipelineState(DxObjects->ComputeCommandList, DxObjects->PipelineStates[CurrentFractalSet][FRACTAL_TYPE_BASE]);
@@ -1148,7 +1136,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			ID3D12GraphicsCommandList7_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_JULIA]);
 			ID3D12GraphicsCommandList7_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
 
-			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[SwapchainBufferIndex]);
+			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[DxObjects->FrameIndex]);
 
 			GpuDescriptorHandle.ptr += DxObjects->cbvDescriptorSize;
 
@@ -1181,8 +1169,8 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 
 		ID3D12CommandQueue_ExecuteCommandLists(DxObjects->ComputeCommandQueue, 1, &DxObjects->ComputeCommandList);
 		
-		THROW_ON_FAIL(ID3D12CommandQueue_Signal(DxObjects->ComputeCommandQueue, SyncObjects->ComputeFinishedFence[SwapchainBufferIndex], SyncObjects->FenceValue[SwapchainBufferIndex]));
-		THROW_ON_FAIL(ID3D12CommandQueue_Wait(DxObjects->DirectCommandQueue, SyncObjects->ComputeFinishedFence[SwapchainBufferIndex], SyncObjects->FenceValue[SwapchainBufferIndex]));
+		THROW_ON_FAIL(ID3D12CommandQueue_Signal(DxObjects->ComputeCommandQueue, DxObjects->ComputeFinishedFence[DxObjects->FrameIndex], DxObjects->FenceValue[DxObjects->FrameIndex]));
+		THROW_ON_FAIL(ID3D12CommandQueue_Wait(DxObjects->DirectCommandQueue, DxObjects->ComputeFinishedFence[DxObjects->FrameIndex], DxObjects->FenceValue[DxObjects->FrameIndex]));
 
 		{
 			D3D12_TEXTURE_BARRIER TextureBarrier = { 0 };
@@ -1192,7 +1180,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			TextureBarrier.AccessAfter = D3D12_BARRIER_ACCESS_COPY_DEST;
 			TextureBarrier.LayoutBefore = D3D12_BARRIER_LAYOUT_PRESENT;
 			TextureBarrier.LayoutAfter = D3D12_BARRIER_LAYOUT_COPY_DEST;
-			TextureBarrier.pResource = DxObjects->SwapchainBuffers[SwapchainBufferIndex];
+			TextureBarrier.pResource = DxObjects->SwapchainBuffers[DxObjects->FrameIndex];
 			TextureBarrier.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
 
 			D3D12_BARRIER_GROUP ResourceBarrier = { 0 };
@@ -1202,7 +1190,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			ID3D12GraphicsCommandList7_Barrier(DxObjects->DirectCommandList, 1, &ResourceBarrier);
 		}
 
-		ID3D12GraphicsCommandList7_CopyResource(DxObjects->DirectCommandList, DxObjects->SwapchainBuffers[SwapchainBufferIndex], DxObjects->MainFrameBuffer);
+		ID3D12GraphicsCommandList7_CopyResource(DxObjects->DirectCommandList, DxObjects->SwapchainBuffers[DxObjects->FrameIndex], DxObjects->MainFrameBuffer);
 
 		{
 			D3D12_TEXTURE_BARRIER TextureBarriers[2] = { 0 };
@@ -1212,7 +1200,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			TextureBarriers[0].AccessAfter = D3D12_BARRIER_ACCESS_COMMON;
 			TextureBarriers[0].LayoutBefore = D3D12_BARRIER_LAYOUT_COPY_DEST;
 			TextureBarriers[0].LayoutAfter = D3D12_BARRIER_LAYOUT_PRESENT;
-			TextureBarriers[0].pResource = DxObjects->SwapchainBuffers[SwapchainBufferIndex];
+			TextureBarriers[0].pResource = DxObjects->SwapchainBuffers[DxObjects->FrameIndex];
 			TextureBarriers[0].Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
 
 			TextureBarriers[1].SyncBefore = D3D12_BARRIER_SYNC_COPY;
@@ -1235,12 +1223,11 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 
 		ID3D12CommandQueue_ExecuteCommandLists(DxObjects->DirectCommandQueue, 1, &DxObjects->DirectCommandList);
 
-		THROW_ON_FAIL(IDXGISwapChain4_Present(DxObjects->Swapchain, bVsync ? 1 : 0, !bVsync ? DXGI_PRESENT_ALLOW_TEARING : 0));
+		THROW_ON_FAIL(IDXGISwapChain4_Present(DxObjects->SwapChain, bVsync ? 1 : 0, !bVsync ? DXGI_PRESENT_ALLOW_TEARING : 0));
 
-		THROW_ON_FAIL(ID3D12CommandQueue_Signal(DxObjects->DirectCommandQueue, SyncObjects->AllClearFence[SwapchainBufferIndex], SyncObjects->FenceValue[SwapchainBufferIndex]));
+		THROW_ON_FAIL(ID3D12CommandQueue_Signal(DxObjects->DirectCommandQueue, DxObjects->AllClearFence[DxObjects->FrameIndex], DxObjects->FenceValue[DxObjects->FrameIndex]));
 
-		THROW_ON_FAIL(ID3D12CommandQueue_Wait(DxObjects->ComputeCommandQueue, SyncObjects->AllClearFence[SwapchainBufferIndex], SyncObjects->FenceValue[SwapchainBufferIndex]));
-		WaitForPreviousFrame(SwapchainBufferIndex, DxObjects, SyncObjects);
+		THROW_ON_FAIL(ID3D12CommandQueue_Wait(DxObjects->ComputeCommandQueue, DxObjects->AllClearFence[DxObjects->FrameIndex], DxObjects->FenceValue[DxObjects->FrameIndex]));
 		break;
 
 	case WM_DESTROY:
@@ -1253,11 +1240,14 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 	return 0;
 }
 
-inline void WaitForPreviousFrame(const UINT SwapchainBufferIndex, struct DxObjects* restrict DxObjects, struct SyncObjects* restrict SyncObjects)
+inline void WaitForPreviousFrame(struct DxObjects* restrict DxObjects)
 {
-	if (ID3D12Fence_GetCompletedValue(SyncObjects->AllClearFence[SwapchainBufferIndex]) < SyncObjects->FenceValue[SwapchainBufferIndex])
+	DxObjects->FrameIndex = IDXGISwapChain3_GetCurrentBackBufferIndex(DxObjects->SwapChain);
+	THROW_ON_FAIL(ID3D12CommandQueue_Signal(DxObjects->DirectCommandQueue, DxObjects->AllClearFence[DxObjects->FrameIndex], ++DxObjects->FenceValue[DxObjects->FrameIndex]));
+
+	if (ID3D12Fence_GetCompletedValue(DxObjects->AllClearFence[DxObjects->FrameIndex]) < DxObjects->FenceValue[DxObjects->FrameIndex])
 	{
-		THROW_ON_FAIL(ID3D12Fence_SetEventOnCompletion(SyncObjects->AllClearFence[SwapchainBufferIndex], SyncObjects->FenceValue[SwapchainBufferIndex], SyncObjects->FenceEvent));
-		THROW_ON_FALSE(WaitForSingleObject(SyncObjects->FenceEvent, INFINITE) == WAIT_OBJECT_0);
+		THROW_ON_FAIL(ID3D12Fence_SetEventOnCompletion(DxObjects->AllClearFence[DxObjects->FrameIndex], DxObjects->FenceValue[DxObjects->FrameIndex], DxObjects->FenceEvent));
+		THROW_ON_FALSE(WaitForSingleObject(DxObjects->FenceEvent, INFINITE) == WAIT_OBJECT_0);
 	}
 }
