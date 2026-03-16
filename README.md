@@ -1,5 +1,5 @@
 # FractalViewer
-A simple fractal viewer written in C
+A simple fractal viewer written in C<br/>
 This project uses the new Work Graphs feature to launch work directly on the GPU
 
 ![image](https://github.com/user-attachments/assets/7a4902be-1fff-46e1-b04a-b070ac1f8055)
