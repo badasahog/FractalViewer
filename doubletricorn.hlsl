@@ -29,20 +29,36 @@ float Mandelbrot(float2 coord)
 {
     uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
     uint iter = 0;
-    float2 constant = coord;
-    float2 sq;
-    do
+
+    float2 c = coord;
+    float2 z = float2(0.0, 0.0);
+
+    while (iter < maxiter && dot(z, z) < 4.0)
     {
-        float2 newvalue;
-        sq = coord * coord;
-        newvalue.x = sq.x - sq.y;
-        newvalue.y = 2 * coord.y * coord.x;
-        coord = newvalue + constant;
+        // Burning-ship style folding
+        z = abs(z); // fold across both axes
+
+        // z^2
+        float x2 = z.x * z.x;
+        float y2 = z.y * z.y;
+
+        // z^3 in complex form:
+        // (x^3 - 3xy^2, 3x^2y - y^3)
+        float2 z3;
+        z3.x = z.x * (x2 - 3.0 * y2);
+        z3.y = z.y * (3.0 * x2 - y2);
+
+        // Slight skew to make it less symmetric
+        z3.x += 0.2 * z3.y;
+
+        z = z3 + c;
         iter++;
-    } while (iter < maxiter && (sq.x + sq.y) < 4.0);
+    }
 
     return frac((float) iter / MyConstantBuffer.MaxIterations.z);
 }
+
+
 
 struct BroadcastPayload
 {

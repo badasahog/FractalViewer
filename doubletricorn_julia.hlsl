@@ -15,9 +15,9 @@
 
 struct ConstantBufferData
 {
-    float4 MaxIterations;
-    float4 WindowPos;
-    float4 JuliaPos;
+	float4 MaxIterations;
+	float4 WindowPos;
+	float4 JuliaPos;
 };
 
 RWTexture2D<float4> Framebuffer : register(u0);
@@ -25,24 +25,39 @@ ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 
 float Julia(float2 coord)
 {
-    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z * 4;
+    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
     uint iter = 0;
-    
+
     float2 z = coord;
     float2 c = MyConstantBuffer.JuliaPos.xy;
-    
-    while (iter < MaxIterations && dot(z, z) < 4.0)
+
+    while (iter < maxiter && dot(z, z) < 4.0)
     {
-        z = float2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+        // Burning-ship style folding
+        z = abs(z);
+
+        // z^2
+        float x2 = z.x * z.x;
+        float y2 = z.y * z.y;
+
+        // z^3
+        float2 z3;
+        z3.x = z.x * (x2 - 3.0 * y2);
+        z3.y = z.y * (3.0 * x2 - y2);
+
+        // Same skew as base
+        z3.x += 0.2 * z3.y;
+
+        z = z3 + c;
         iter++;
     }
-    
+
     return frac((float) iter / MyConstantBuffer.MaxIterations.z);
 }
 
 struct BroadcastPayload
 {
-    uint2 DispatchGrid : SV_DispatchGrid;
+	uint2 DispatchGrid : SV_DispatchGrid;
 };
 
 [Shader("node")]
@@ -50,12 +65,12 @@ struct BroadcastPayload
 [NodeLaunch("thread")]
 [NodeId("Entry")]
 void main(
-    [MaxRecords(1)]
+	[MaxRecords(1)]
 	[NodeId("MyConsumer")]
-    NodeOutput<BroadcastPayload> MyConsumer
+	NodeOutput<BroadcastPayload> MyConsumer
 )
 {
-    ThreadNodeOutputRecords<BroadcastPayload> outputRecord = MyConsumer.GetThreadNodeOutputRecords(1);
+	ThreadNodeOutputRecords<BroadcastPayload> outputRecord = MyConsumer.GetThreadNodeOutputRecords(1);
 	outputRecord.Get().DispatchGrid = float2(MyConstantBuffer.MaxIterations.x, MyConstantBuffer.MaxIterations.y) / 8;
 	outputRecord.OutputComplete();
 }
@@ -66,14 +81,14 @@ void main(
 [NumThreads(8, 8, 1)]
 [NodeID("MyConsumer")]
 void myConsumer(
-    uint3 DTid : SV_DispatchThreadID,
-    DispatchNodeInputRecord<BroadcastPayload> InputRecord
+	uint3 DTid : SV_DispatchThreadID,
+	DispatchNodeInputRecord<BroadcastPayload> InputRecord
 )
 {
-    float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
-    float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+	float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
+	float2 coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
 
-float ColorIndex = Julia(Coord);
-    
-    Framebuffer[DTid.xy] = float4(frac(ColorIndex * 1), frac(ColorIndex * 3), frac(ColorIndex * 5), 0);
+	float colorIndex = Julia(coord);
+	
+	Framebuffer[DTid.xy] = float4(frac(colorIndex * 1), frac(colorIndex * 3), frac(colorIndex * 5), 0);
 }

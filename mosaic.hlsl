@@ -27,21 +27,49 @@ SamplerState MySampler : register(s0);
 
 float Mandelbrot(float2 coord)
 {
-    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
+    uint maxiter = (uint) (MyConstantBuffer.MaxIterations.z * 6);
     uint iter = 0;
-    float2 constant = coord;
-    float2 sq;
-    do
-    {
-        float2 newvalue;
-        sq = coord * coord;
-        newvalue.x = sq.x - sq.y;
-        newvalue.y = 2 * coord.y * coord.x;
-        coord = newvalue + constant;
-        iter++;
-    } while (iter < maxiter && (sq.x + sq.y) < 4.0);
+    
+    float2 c = coord;
+    float2 z = float2(0.0, 0.0);
+    float2 prev = float2(0.0, 0.0); // Phoenix "feather" term
+    
+    const float phi = 1.6180339887; // Golden ratio for organic curves
 
-    return frac((float) iter / MyConstantBuffer.MaxIterations.z);
+    while (iter < maxiter && dot(z, z) < 16.0)
+    {
+        // Phoenix: z^2 + c + k*previous
+        float x2 = z.x * z.x;
+        float y2 = z.y * z.y;
+        float2 z2 = float2(x2 - y2, 2.0 * z.x * z.y);
+        
+        // Golden spiral modulation
+        float r = length(z);
+        float theta = atan2(z.y, z.x);
+        float spiral = sin(phi * theta - phi * r * 0.3);
+        
+        z = z2 + c + 0.15 * prev * spiral;
+        prev = z2; // Update phoenix term
+        iter++;
+    }
+
+    // Multi-layer coloring for rainbows
+    float it = (float) iter;
+    float r2 = dot(z, z);
+    float smooth = it;
+    
+    if (r2 > 4.0 && iter < maxiter)
+    {
+        float log_zn = 0.5 * log(r2);
+        float nu = log(log_zn / log(2.0)) / log(2.0);
+        smooth = it + 1.0 - nu;
+    }
+    
+    // Layered fractal coloring
+    float angle = atan2(z.y, z.x);
+    float color_t = frac(smooth / 6.0 + 0.2 * angle / 6.28318);
+    
+    return color_t;
 }
 
 struct BroadcastPayload

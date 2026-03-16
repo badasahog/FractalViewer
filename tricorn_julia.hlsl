@@ -33,7 +33,6 @@ float Julia(float2 z)
     uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
     float2 c = MyConstantBuffer.JuliaPos.xy;
     
-    
     for (int i = 0; i < maxiter; i++)
     {
         z = ComplexSquareConjugate(z) + c;
