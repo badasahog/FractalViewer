@@ -117,6 +117,8 @@ enum FractalSet
 	FRACTAL_SET_MANDELBROT,
 	FRACTAL_SET_TRICORN,
 	FRACTAL_SET_BURNINGSHIP,
+	FRACTAL_SET_DOUBLETRICORN,
+	FRACTAL_SET_MOSAIC,
 	FRACTAL_SET_COUNT
 };
 
@@ -135,22 +137,26 @@ enum RenderMode
 };
 
 static const LPCWSTR const ShaderFileNames[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT] = {
-	{ L"mandelbrot_julia.cso",	L"mandelbrot.cso" },
-	{ L"tricorn_julia.cso",		L"tricorn.cso" },
-	{ L"burningship_julia.cso",	L"burningship.cso" }
+	{ L"mandelbrot_julia.cso",		L"mandelbrot.cso" },
+	{ L"tricorn_julia.cso",			L"tricorn.cso" },
+	{ L"burningship_julia.cso",		L"burningship.cso" },
+	{ L"doubletricorn_julia.cso",	L"doubletricorn.cso" },
+	{ L"mosaic_julia.cso",			L"mosaic.cso" }
 };
 
 static const LPCWSTR const ProgramNames[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT] = {
-	{ L"MANDELBROT_JULIA",	L"MANDELBROT" },
-	{ L"TRICORN_JULIA",		L"TRICORN" },
-	{ L"BURNINGSHIP_JULIA",	L"BURNINGSHIP" }
+	{ L"MANDELBROT_JULIA",		L"MANDELBROT" },
+	{ L"TRICORN_JULIA",			L"TRICORN" },
+	{ L"BURNINGSHIP_JULIA",		L"BURNINGSHIP" },
+	{ L"DOUBLETRICORN_JULIA",	L"DOUBLETRICORN" },
+	{ L"MOSAIC_JULIA",			L"MOSAIC" }
 };
 
 struct DxObjects
 {
 	ID3D12RootSignature* RootSignatures[RENDER_MODE_COUNT];
-	UINT64 ScratchSizeInBytes[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
-	D3D12_GPU_VIRTUAL_ADDRESS BackingMemoryGpuAddresses[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
+	UINT64 ScratchSizeInBytes[FRACTAL_TYPE_COUNT];
+	D3D12_GPU_VIRTUAL_ADDRESS BackingMemoryGpuAddresses[FRACTAL_TYPE_COUNT];
 	D3D12_PROGRAM_IDENTIFIER ProgramIdentifiers[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
 
 	IDXGISwapChain4* SwapChain;
@@ -272,7 +278,7 @@ int main()
 		THROW_ON_FAIL(IDXGIFactory6_EnumAdapterByGpuPreference(Factory, 0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, &IID_IDXGIAdapter1, &Adapter));
 	}
 
-	THROW_ON_FAIL(D3D12CreateDevice(Adapter, D3D_FEATURE_LEVEL_11_0, &IID_ID3D12Device10, &Device));
+	THROW_ON_FAIL(D3D12CreateDevice(Adapter, D3D_FEATURE_LEVEL_12_2, &IID_ID3D12Device10, &Device));
 
 	struct DxObjects DxObjects = { 0 };
 
@@ -535,11 +541,12 @@ int main()
 		}
 	}
 
-	ID3D12Resource* BackingMemoryResource[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
+	ID3D12Resource* BackingMemoryResource[FRACTAL_TYPE_COUNT];
 
-	for (int i = 0; i < FRACTAL_SET_COUNT; i++)
+	for (int j = 0; j < FRACTAL_TYPE_COUNT; j++)
 	{
-		for (int j = 0; j < FRACTAL_TYPE_COUNT; j++)
+		UINT64 BackingMemorySize = 0;
+		for (int i = 0; i < FRACTAL_SET_COUNT; i++)
 		{
 			D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS MemoryRequirements = { 0 };
 
@@ -553,51 +560,53 @@ int main()
 				THROW_ON_FAIL(ID3D12WorkGraphProperties_Release(WorkGraphProperties));
 			}
 
+			BackingMemorySize = max(BackingMemorySize, MemoryRequirements.MaxSizeInBytes);
+
 			{
 				ID3D12StateObjectProperties1* StateObjectProperties;
 				THROW_ON_FAIL(ID3D12StateObject_QueryInterface(StateObjects[i][j], &IID_ID3D12StateObjectProperties1, &StateObjectProperties));
 				ID3D12StateObjectProperties1_GetProgramIdentifier(StateObjectProperties, &DxObjects.ProgramIdentifiers[i][j], ProgramNames[i][j]);
 				THROW_ON_FAIL(ID3D12StateObjectProperties1_Release(StateObjectProperties));
 			}
-
-			if (MemoryRequirements.MaxSizeInBytes > 0)
-			{
-				D3D12_HEAP_PROPERTIES HeapProperties = { 0 };
-				HeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
-				HeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
-				HeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-
-				D3D12_RESOURCE_DESC1 ResourceDesc = { 0 };
-				ResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-				ResourceDesc.Alignment = 0;
-				ResourceDesc.Width = MemoryRequirements.MaxSizeInBytes;
-				ResourceDesc.Height = 1;
-				ResourceDesc.DepthOrArraySize = 1;
-				ResourceDesc.MipLevels = 1;
-				ResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
-				ResourceDesc.SampleDesc.Count = 1;
-				ResourceDesc.SampleDesc.Quality = 0;
-				ResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-				ResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-
-				THROW_ON_FAIL(ID3D12Device10_CreateCommittedResource3(
-					Device,
-					&HeapProperties,
-					D3D12_HEAP_FLAG_NONE,
-					&ResourceDesc,
-					D3D12_BARRIER_LAYOUT_UNDEFINED,
-					NULL,
-					NULL,
-					0,
-					NULL,
-					&IID_ID3D12Resource,
-					&BackingMemoryResource[i][j]));
-
-				DxObjects.BackingMemoryGpuAddresses[i][j] = ID3D12Resource_GetGPUVirtualAddress(BackingMemoryResource[i][j]);
-			}
-
-			DxObjects.ScratchSizeInBytes[i][j] = MemoryRequirements.MaxSizeInBytes;
 		}
+
+		if (BackingMemorySize > 0)
+		{
+			D3D12_HEAP_PROPERTIES HeapProperties = { 0 };
+			HeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+			HeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+			HeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+
+			D3D12_RESOURCE_DESC1 ResourceDesc = { 0 };
+			ResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+			ResourceDesc.Alignment = 0;
+			ResourceDesc.Width = BackingMemorySize;
+			ResourceDesc.Height = 1;
+			ResourceDesc.DepthOrArraySize = 1;
+			ResourceDesc.MipLevels = 1;
+			ResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+			ResourceDesc.SampleDesc.Count = 1;
+			ResourceDesc.SampleDesc.Quality = 0;
+			ResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+			ResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+			THROW_ON_FAIL(ID3D12Device10_CreateCommittedResource3(
+				Device,
+				&HeapProperties,
+				D3D12_HEAP_FLAG_NONE,
+				&ResourceDesc,
+				D3D12_BARRIER_LAYOUT_UNDEFINED,
+				NULL,
+				NULL,
+				0,
+				NULL,
+				&IID_ID3D12Resource,
+				&BackingMemoryResource[j]));
+
+			DxObjects.BackingMemoryGpuAddresses[j] = ID3D12Resource_GetGPUVirtualAddress(BackingMemoryResource[j]);
+		}
+
+		DxObjects.ScratchSizeInBytes[j] = BackingMemorySize;
 	}
 
 	ID3D12Resource* StationaryConstantBuffer[BUFFER_COUNT];
@@ -674,12 +683,9 @@ int main()
 
 	WaitForPreviousFrame(&DxObjects);
 
-	for (int i = 0; i < FRACTAL_SET_COUNT; i++)
+	for (int i = 0; i < FRACTAL_TYPE_COUNT; i++)
 	{
-		for (int j = 0; j < FRACTAL_TYPE_COUNT; j++)
-		{
-			THROW_ON_FAIL(ID3D12Resource_Release(BackingMemoryResource[i][j]));
-		}
+		THROW_ON_FAIL(ID3D12Resource_Release(BackingMemoryResource[i]));
 	}
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
@@ -802,9 +808,6 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 	static bool out = false;
 	static bool mouseClicked = false;
 
-	static uint32_t WindowWidth;
-	static uint32_t WindowHeight;
-
 	static LARGE_INTEGER ProcessorFrequency;
 	static LONGLONG TickCount = 0;
 
@@ -857,6 +860,12 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			break;
 		case '3':
 			CurrentFractalSet = FRACTAL_SET_BURNINGSHIP;
+			break;
+		case '4':
+			CurrentFractalSet = FRACTAL_SET_DOUBLETRICORN;
+			break;
+		case '5':
+			CurrentFractalSet = FRACTAL_SET_MOSAIC;
 			break;
 		case 'W':
 			up = true;
@@ -961,8 +970,8 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			break;
 		}
 
-		DefaultCbData.MaxIterations[0] = CbData.MaxIterations[0] = WindowWidth = LOWORD(lParam);
-		DefaultCbData.MaxIterations[1] = CbData.MaxIterations[1] = WindowHeight = HIWORD(lParam);
+		DefaultCbData.MaxIterations[0] = CbData.MaxIterations[0] = LOWORD(lParam);
+		DefaultCbData.MaxIterations[1] = CbData.MaxIterations[1] = HIWORD(lParam);
 
 		for (int i = 0; i < BUFFER_COUNT; i++)
 		{
@@ -978,8 +987,8 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 		THROW_ON_FAIL(IDXGISwapChain4_ResizeBuffers(
 			DxObjects->SwapChain,
 			BUFFER_COUNT,
-			WindowWidth,
-			WindowHeight,
+			LOWORD(lParam),
+			HIWORD(lParam),
 			DXGI_FORMAT_R8G8B8A8_UNORM,
 			DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
 		));
@@ -1010,8 +1019,8 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			D3D12_RESOURCE_DESC1 BufferDesc = { 0 };
 			BufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 			BufferDesc.Alignment = 0;
-			BufferDesc.Width = WindowWidth;
-			BufferDesc.Height = WindowHeight;
+			BufferDesc.Width = LOWORD(lParam);
+			BufferDesc.Height = HIWORD(lParam);
 			BufferDesc.DepthOrArraySize = 1;
 			BufferDesc.MipLevels = 1;
 			BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1162,10 +1171,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 				SetProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
 				SetProgramDesc.WorkGraph.ProgramIdentifier = DxObjects->ProgramIdentifiers[CurrentFractalSet][FRACTAL_TYPE_JULIA];
 				SetProgramDesc.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE;
-				if (DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA] > 0)
+				if (DxObjects->ScratchSizeInBytes[FRACTAL_TYPE_JULIA] > 0)
 				{
-					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[CurrentFractalSet][FRACTAL_TYPE_JULIA];
-					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[FRACTAL_TYPE_JULIA];
+					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[FRACTAL_TYPE_JULIA];
 				}
 
 				ID3D12GraphicsCommandList10_SetProgram(DxObjects->ComputeCommandList, &SetProgramDesc);
@@ -1215,10 +1224,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 				SetProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
 				SetProgramDesc.WorkGraph.ProgramIdentifier = DxObjects->ProgramIdentifiers[CurrentFractalSet][FRACTAL_TYPE_BASE];
 				SetProgramDesc.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE;
-				if (DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_BASE] > 0)
+				if (DxObjects->ScratchSizeInBytes[FRACTAL_TYPE_BASE] > 0)
 				{
-					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[CurrentFractalSet][FRACTAL_TYPE_BASE];
-					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_BASE];
+					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[FRACTAL_TYPE_BASE];
+					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[FRACTAL_TYPE_BASE];
 				}
 
 				ID3D12GraphicsCommandList10_SetProgram(DxObjects->ComputeCommandList, &SetProgramDesc);
@@ -1276,10 +1285,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 				SetProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
 				SetProgramDesc.WorkGraph.ProgramIdentifier = DxObjects->ProgramIdentifiers[CurrentFractalSet][FRACTAL_TYPE_JULIA];
 				SetProgramDesc.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE;
-				if (DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA] > 0)
+				if (DxObjects->ScratchSizeInBytes[FRACTAL_TYPE_JULIA] > 0)
 				{
-					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[CurrentFractalSet][FRACTAL_TYPE_JULIA];
-					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[FRACTAL_TYPE_JULIA];
+					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[FRACTAL_TYPE_JULIA];
 				}
 
 				ID3D12GraphicsCommandList10_SetProgram(DxObjects->ComputeCommandList, &SetProgramDesc);
