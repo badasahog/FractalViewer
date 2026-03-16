@@ -1,5 +1,5 @@
 /*
-* (C) 2024 badasahog. All Rights Reserved
+* (C) 2024-2026 badasahog. All Rights Reserved
 * 
 * The above copyright notice shall be included in
 * all copies or substantial portions of the Software.
@@ -15,55 +15,82 @@
 
 struct ConstantBufferData
 {
-    float4 MaxIterations;
-    float4 WindowPos;
-    float4 JuliaPos;
+	float4 MaxIterations;
+	float4 WindowPos;
+	float4 JuliaPos;
 };
 
-RWTexture2D<float4> framebuffer : register(u0);
-Texture2D texture : register(t0);
-ConstantBuffer<ConstantBufferData> cb : register(b0, space0);
-SamplerState mySampler : register(s0);
+RWTexture2D<float4> Framebuffer : register(u0);
+Texture2D Texture : register(t0);
+ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
+SamplerState MySampler : register(s0);
 
 float2 ComplexSquareConjugate(float2 z)
 {
-    return float2(z.x * z.x - z.y * z.y, -2.0 * z.x * z.y);
+	return float2(z.x * z.x - z.y * z.y, -2.0 * z.x * z.y);
 }
 
 float Tricorn(float2 c)
 {
-    uint maxiter = (uint) cb.MaxIterations.z * 4;
-    
-    float2 z = c;
-    for (int i = 0; i < maxiter; i++)
-    {
-        z = ComplexSquareConjugate(z) + c;
-        if (dot(z, z) > 4.0)
-        {
-            return float(i) / maxiter;
+    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z * 4;
+	
+	float2 z = c;
+    for (int i = 0; i < MaxIterations; i++)
+	{
+		z = ComplexSquareConjugate(z) + c;
+		if (dot(z, z) > 4.0)
+		{
+            return float(i) / MaxIterations;
         }
-    }
-    return 0.0;
+	}
+	return 0.0;
 }
 
-[numthreads(32, 32, 1)]
-void main(uint3 DTid : SV_DispatchThreadID)
+struct BroadcastPayload
 {
-    bool pixelInMinimap = (((float) DTid.x / cb.MaxIterations.x) > .8) && (((float) DTid.y / cb.MaxIterations.y) < .2);
-    //draw the minimap
-    
-    if (WaveActiveAnyTrue(pixelInMinimap))
-    {
-        float2 minimapScaleTo1 = float2((((float) DTid.x / cb.MaxIterations.x) - .8) * 5, ((float) DTid.y / cb.MaxIterations.y) * 5);
-        
-        framebuffer[DTid.xy] = texture.Sample(mySampler, minimapScaleTo1);
-    }
-    else
-    {
-        float2 WindowLocal = ((float2) DTid.xy / cb.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
-        float2 coord = WindowLocal.xy * cb.WindowPos.xy + cb.WindowPos.zw;
-        
-        float colorIndex = Tricorn(coord);
-        framebuffer[DTid.xy] = float4(frac(colorIndex * 1), frac(colorIndex * 3), frac(colorIndex * 5), 0);
-    }
+    uint2 DispatchGrid : SV_DispatchGrid;
+};
+
+[Shader("node")]
+[NodeIsProgramEntry]
+[NodeLaunch("thread")]
+[NodeId("Entry")]
+void main(
+    [MaxRecords(1)]
+	[NodeId("MyConsumer")]
+    NodeOutput<BroadcastPayload> MyConsumer
+)
+{
+    ThreadNodeOutputRecords<BroadcastPayload> OutputRecord = MyConsumer.GetThreadNodeOutputRecords(1);
+	OutputRecord.Get().DispatchGrid = float2(MyConstantBuffer.MaxIterations.x, MyConstantBuffer.MaxIterations.y) / 8;
+	OutputRecord.OutputComplete();
+}
+
+[Shader("node")]
+[NodeLaunch("broadcasting")]
+[NodeMaxDispatchGrid(1024, 1024, 1)]
+[NumThreads(8, 8, 1)]
+[NodeID("MyConsumer")]
+void myConsumer(
+    uint3 DTid : SV_DispatchThreadID,
+    DispatchNodeInputRecord<BroadcastPayload> InputRecord
+)
+{
+	bool pixelInMinimap = (((float) DTid.x / MyConstantBuffer.MaxIterations.x) > .8) && (((float) DTid.y / MyConstantBuffer.MaxIterations.y) < .2);
+	//draw the minimap
+	
+	if (WaveActiveAnyTrue(pixelInMinimap))
+	{
+		float2 MinimapScaleTo1 = float2((((float) DTid.x / MyConstantBuffer.MaxIterations.x) - .8) * 5, ((float) DTid.y / MyConstantBuffer.MaxIterations.y) * 5);
+		
+		Framebuffer[DTid.xy] = Texture.Sample(MySampler, MinimapScaleTo1);
+	}
+	else
+	{
+		float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
+		float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+		
+		float ColorIndex = Tricorn(Coord);
+		Framebuffer[DTid.xy] = float4(frac(ColorIndex * 1), frac(ColorIndex * 3), frac(ColorIndex * 5), 0);
+	}
 }

@@ -1,5 +1,5 @@
 /*
-* (C) 2024 badasahog. All Rights Reserved
+* (C) 2024-2026 badasahog. All Rights Reserved
 * 
 * The above copyright notice shall be included in
 * all copies or substantial portions of the Software.
@@ -20,34 +20,60 @@ struct ConstantBufferData
     float4 JuliaPos;
 };
 
-RWTexture2D<float4> framebuffer : register(u0);
-ConstantBuffer<ConstantBufferData> cb : register(b0, space0);
+RWTexture2D<float4> Framebuffer : register(u0);
+ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 
-float julia(float2 coord)
+float Julia(float2 coord)
 {
-    uint maxiter = (uint) cb.MaxIterations.z * 4;
+    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z * 4;
     uint iter = 0;
     
     float2 z = coord;
-    float2 c = cb.JuliaPos.xy;
+    float2 c = MyConstantBuffer.JuliaPos.xy;
     
-    while (iter < maxiter && dot(z, z) < 4.0)
+    while (iter < MaxIterations && dot(z, z) < 4.0)
     {
         z = float2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
         iter++;
     }
     
-    return frac((float) iter / cb.MaxIterations.z);
+    return frac((float) iter / MyConstantBuffer.MaxIterations.z);
 }
 
-[numthreads(32, 32, 1)]
-void main(uint3 DTid : SV_DispatchThreadID)
+struct BroadcastPayload
 {
-    float2 WindowLocal = ((float2) DTid.xy / cb.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
-    float2 coord = WindowLocal.xy * cb.WindowPos.xy + cb.WindowPos.zw;
+    uint2 DispatchGrid : SV_DispatchGrid;
+};
 
-    float colorIndex = julia(coord);
+[Shader("node")]
+[NodeIsProgramEntry]
+[NodeLaunch("thread")]
+[NodeId("Entry")]
+void main(
+    [MaxRecords(1)]
+	[NodeId("MyConsumer")]
+    NodeOutput<BroadcastPayload> MyConsumer
+)
+{
+    ThreadNodeOutputRecords<BroadcastPayload> outputRecord = MyConsumer.GetThreadNodeOutputRecords(1);
+	outputRecord.Get().DispatchGrid = float2(MyConstantBuffer.MaxIterations.x, MyConstantBuffer.MaxIterations.y) / 8;
+	outputRecord.OutputComplete();
+}
+
+[Shader("node")]
+[NodeLaunch("broadcasting")]
+[NodeMaxDispatchGrid(1024, 1024, 1)]
+[NumThreads(8, 8, 1)]
+[NodeID("MyConsumer")]
+void myConsumer(
+    uint3 DTid : SV_DispatchThreadID,
+    DispatchNodeInputRecord<BroadcastPayload> InputRecord
+)
+{
+    float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
+    float2 coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+
+    float colorIndex = Julia(coord);
     
-    framebuffer[DTid.xy] = float4(frac(colorIndex * 1), frac(colorIndex * 3), frac(colorIndex * 5), 0);
-    
+    Framebuffer[DTid.xy] = float4(frac(colorIndex * 1), frac(colorIndex * 3), frac(colorIndex * 5), 0);
 }

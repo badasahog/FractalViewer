@@ -14,15 +14,14 @@
 */
 
 #define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-
 #define COBJMACROS
-#include <d3d12.h>
+#include <windows.h>
+
 #include <dxgi1_6.h>
+#include <d3d12.h>
 
 #ifdef _DEBUG
 #include <dxgidebug.h>
-#include <d3d12sdklayers.h>
 #endif
 
 #include <stdint.h>
@@ -36,7 +35,7 @@
 
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
-__declspec(dllexport) UINT D3D12SDKVersion = 612;
+__declspec(dllexport) UINT D3D12SDKVersion = 613;
 __declspec(dllexport) char* D3D12SDKPath = ".\\D3D12\\";
 
 HANDLE ConsoleHandle;
@@ -101,7 +100,7 @@ inline void MEMCPY_VERIFY_IMPL(errno_t error, int line)
 
 static const bool bWarp = false;
 
-#define BUFFER_COUNT 3u
+#define BUFFER_COUNT 3
 #define WM_INIT (WM_USER + 1)
 
 struct ConstantBufferData
@@ -135,26 +134,35 @@ enum RenderMode
 	RENDER_MODE_COUNT
 };
 
-static const LPCWSTR ShaderFileNames[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT] = {
+static const LPCWSTR const ShaderFileNames[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT] = {
 	{ L"mandelbrot_julia.cso",	L"mandelbrot.cso" },
 	{ L"tricorn_julia.cso",		L"tricorn.cso" },
 	{ L"burningship_julia.cso",	L"burningship.cso" }
 };
 
+static const LPCWSTR const ProgramNames[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT] = {
+	{ L"MANDELBROT_JULIA",	L"MANDELBROT" },
+	{ L"TRICORN_JULIA",		L"TRICORN" },
+	{ L"BURNINGSHIP_JULIA",	L"BURNINGSHIP" }
+};
+
 struct DxObjects
 {
-	ID3D12PipelineState* PipelineStates[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
 	ID3D12RootSignature* RootSignatures[RENDER_MODE_COUNT];
+	UINT64 ScratchSizeInBytes[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
+	D3D12_GPU_VIRTUAL_ADDRESS BackingMemoryGpuAddresses[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
+	D3D12_PROGRAM_IDENTIFIER ProgramIdentifiers[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
+
 	IDXGISwapChain4* SwapChain;
 	ID3D12Resource* SwapchainBuffers[BUFFER_COUNT];
 
 	ID3D12CommandQueue* DirectCommandQueue;
 	ID3D12CommandAllocator* DirectCommandAllocator;
-	ID3D12GraphicsCommandList7* DirectCommandList;
+	ID3D12GraphicsCommandList10* DirectCommandList;
 
 	ID3D12CommandQueue* ComputeCommandQueue;
 	ID3D12CommandAllocator* ComputeCommandAllocator;
-	ID3D12GraphicsCommandList7* ComputeCommandList;
+	ID3D12GraphicsCommandList10* ComputeCommandList;
 
 	ID3D12Resource* MinimapFrameBuffer;
 	ID3D12Resource* MainFrameBuffer;
@@ -164,11 +172,10 @@ struct DxObjects
 	D3D12_GPU_VIRTUAL_ADDRESS StationaryConstantBufferPtr[BUFFER_COUNT];
 	D3D12_GPU_VIRTUAL_ADDRESS MovableConstantBufferPtr[BUFFER_COUNT];
 	
-	UINT cbvDescriptorSize;
+	UINT CbvDescriptorSize;
 
 	UINT8* StationaryCbCpuPtr[BUFFER_COUNT];
 	UINT8* MovableCbCpuPtr[BUFFER_COUNT];
-
 
 	ID3D12Fence* ComputeFinishedFence[BUFFER_COUNT];
 	ID3D12Fence* AllClearFence[BUFFER_COUNT];
@@ -185,23 +192,16 @@ inline void WaitForPreviousFrame(struct DxObjects* restrict DxObjects);
 int main()
 {
 	ConsoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-	const HINSTANCE Instance = GetModuleHandleW(NULL);
-
-	int WindowWidth;
-	int WindowHeight;
-
-	{
-		RECT WindowRect;
-		THROW_ON_FALSE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &WindowRect, 0));
-		WindowWidth = WindowRect.right - WindowRect.left;
-		WindowHeight = WindowRect.bottom - WindowRect.top;
-	}
-
+	
 	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+	const HINSTANCE Instance = GetModuleHandleW(NULL);
+
+	RECT WindowRect;
+	THROW_ON_FALSE(SystemParametersInfoW(SPI_GETWORKAREA, 0, &WindowRect, 0));
+	
 	HICON Icon = LoadIconW(NULL, IDI_APPLICATION);
 	HCURSOR Cursor = LoadCursorW(NULL, IDC_ARROW);
-	static const LPCTSTR WindowClassName = L"ComputeShaders";
 
 	WNDCLASSEXW WindowClass = { 0 };
 	WindowClass.cbSize = sizeof(WNDCLASSEXW);
@@ -214,7 +214,7 @@ int main()
 	WindowClass.hCursor = Cursor;
 	WindowClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 2);
 	WindowClass.lpszMenuName = NULL;
-	WindowClass.lpszClassName = WindowClassName;
+	WindowClass.lpszClassName = L"ComputeShaders";
 	WindowClass.hIconSm = Icon;
 
 	ATOM WindowClassAtom = RegisterClassExW(&WindowClass);
@@ -223,13 +223,13 @@ int main()
 
 	HWND Window = CreateWindowExW(
 		0UL,
-		WindowClassName,
+		WindowClass.lpszClassName,
 		L"D3D Compute Shader",
 		WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT,
 		CW_USEDEFAULT,
-		WindowWidth,
-		WindowHeight,
+		WindowRect.right - WindowRect.left,
+		WindowRect.bottom - WindowRect.top,
 		NULL,
 		NULL,
 		Instance,
@@ -276,7 +276,7 @@ int main()
 
 	struct DxObjects DxObjects = { 0 };
 
-	DxObjects.cbvDescriptorSize = ID3D12Device10_GetDescriptorHandleIncrementSize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	DxObjects.CbvDescriptorSize = ID3D12Device10_GetDescriptorHandleIncrementSize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
 #ifdef _DEBUG
 	ID3D12InfoQueue* InfoQueue;
@@ -324,11 +324,11 @@ int main()
 	THROW_ON_FAIL(ID3D12Device10_CreateCommandAllocator(Device, D3D12_COMMAND_LIST_TYPE_DIRECT, &IID_ID3D12CommandAllocator, &DxObjects.DirectCommandAllocator));
 	THROW_ON_FAIL(ID3D12Device10_CreateCommandAllocator(Device, D3D12_COMMAND_LIST_TYPE_COMPUTE, &IID_ID3D12CommandAllocator, &DxObjects.ComputeCommandAllocator));
 
-	THROW_ON_FAIL(ID3D12Device10_CreateCommandList(Device, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, DxObjects.DirectCommandAllocator, NULL, &IID_ID3D12GraphicsCommandList7, &DxObjects.DirectCommandList));
-	THROW_ON_FAIL(ID3D12GraphicsCommandList7_Close(DxObjects.DirectCommandList));
+	THROW_ON_FAIL(ID3D12Device10_CreateCommandList(Device, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, DxObjects.DirectCommandAllocator, NULL, &IID_ID3D12GraphicsCommandList10, &DxObjects.DirectCommandList));
+	THROW_ON_FAIL(ID3D12GraphicsCommandList10_Close(DxObjects.DirectCommandList));
 
-	THROW_ON_FAIL(ID3D12Device10_CreateCommandList(Device, 0, D3D12_COMMAND_LIST_TYPE_COMPUTE, DxObjects.ComputeCommandAllocator, NULL, &IID_ID3D12GraphicsCommandList7, &DxObjects.ComputeCommandList));
-	THROW_ON_FAIL(ID3D12GraphicsCommandList7_Close(DxObjects.ComputeCommandList));
+	THROW_ON_FAIL(ID3D12Device10_CreateCommandList(Device, 0, D3D12_COMMAND_LIST_TYPE_COMPUTE, DxObjects.ComputeCommandAllocator, NULL, &IID_ID3D12GraphicsCommandList10, &DxObjects.ComputeCommandList));
+	THROW_ON_FAIL(ID3D12GraphicsCommandList10_Close(DxObjects.ComputeCommandList));
 
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
@@ -487,6 +487,8 @@ int main()
 		THROW_ON_FAIL(ID3D10Blob_Release(RootSig));
 	}
 
+	ID3D12StateObject* StateObjects[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
+
 	for (int i = 0; i < FRACTAL_SET_COUNT; i++)
 	{
 		for (int j = 0; j < FRACTAL_TYPE_COUNT; j++)
@@ -502,18 +504,99 @@ int main()
 
 			const void* ShaderFilePtr = MapViewOfFile(ShaderFileMap, FILE_MAP_READ, 0, 0, 0);
 
-			{
-				D3D12_COMPUTE_PIPELINE_STATE_DESC PipelineStateDescription = { 0 };
-				PipelineStateDescription.pRootSignature = DxObjects.RootSignatures[j];
-				PipelineStateDescription.CS.pShaderBytecode = ShaderFilePtr;
-				PipelineStateDescription.CS.BytecodeLength = ShaderFileSize;
-				PipelineStateDescription.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
-				THROW_ON_FAIL(ID3D12Device10_CreateComputePipelineState(Device, &PipelineStateDescription, &IID_ID3D12PipelineState, &DxObjects.PipelineStates[i][j]));
-			}
-			
+			D3D12_DXIL_LIBRARY_DESC LibraryDesc = { 0 };
+			LibraryDesc.DXILLibrary.pShaderBytecode = ShaderFilePtr;
+			LibraryDesc.DXILLibrary.BytecodeLength = ShaderFileSize;
+
+			D3D12_WORK_GRAPH_DESC WorkGraphDesc = { 0 };
+			WorkGraphDesc.ProgramName = ProgramNames[i][j];
+			WorkGraphDesc.Flags = D3D12_WORK_GRAPH_FLAG_INCLUDE_ALL_AVAILABLE_NODES;
+
+			D3D12_STATE_SUBOBJECT StateSubojects[3] = { 0 };
+			StateSubojects[0].Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
+			StateSubojects[0].pDesc = &DxObjects.RootSignatures[j];
+
+			StateSubojects[1].Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
+			StateSubojects[1].pDesc = &LibraryDesc;
+
+			StateSubojects[2].Type = D3D12_STATE_SUBOBJECT_TYPE_WORK_GRAPH;
+			StateSubojects[2].pDesc = &WorkGraphDesc;
+
+			D3D12_STATE_OBJECT_DESC StateObjectDesc = { 0 };
+			StateObjectDesc.Type = D3D12_STATE_OBJECT_TYPE_EXECUTABLE;
+			StateObjectDesc.NumSubobjects = ARRAYSIZE(StateSubojects);
+			StateObjectDesc.pSubobjects = StateSubojects;
+
+			THROW_ON_FAIL(ID3D12Device10_CreateStateObject(Device, &StateObjectDesc, &IID_ID3D12StateObject, &StateObjects[i][j]));
+
 			THROW_ON_FALSE(UnmapViewOfFile(ShaderFilePtr));
 			THROW_ON_FALSE(CloseHandle(ShaderFileMap));
 			THROW_ON_FALSE(CloseHandle(ShaderFileHandle));
+		}
+	}
+
+	ID3D12Resource* BackingMemoryResource[FRACTAL_SET_COUNT][FRACTAL_TYPE_COUNT];
+
+	for (int i = 0; i < FRACTAL_SET_COUNT; i++)
+	{
+		for (int j = 0; j < FRACTAL_TYPE_COUNT; j++)
+		{
+			D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS MemoryRequirements = { 0 };
+
+			{
+				ID3D12WorkGraphProperties* WorkGraphProperties;
+				THROW_ON_FAIL(ID3D12StateObject_QueryInterface(StateObjects[i][j], &IID_ID3D12WorkGraphProperties, &WorkGraphProperties));
+
+				UINT WGIndex = ID3D12WorkGraphProperties_GetWorkGraphIndex(WorkGraphProperties, ProgramNames[i][j]);
+				ID3D12WorkGraphProperties_GetWorkGraphMemoryRequirements(WorkGraphProperties, WGIndex, &MemoryRequirements);
+
+				THROW_ON_FAIL(ID3D12WorkGraphProperties_Release(WorkGraphProperties));
+			}
+
+			{
+				ID3D12StateObjectProperties1* StateObjectProperties;
+				THROW_ON_FAIL(ID3D12StateObject_QueryInterface(StateObjects[i][j], &IID_ID3D12StateObjectProperties1, &StateObjectProperties));
+				ID3D12StateObjectProperties1_GetProgramIdentifier(StateObjectProperties, &DxObjects.ProgramIdentifiers[i][j], ProgramNames[i][j]);
+				THROW_ON_FAIL(ID3D12StateObjectProperties1_Release(StateObjectProperties));
+			}
+
+			if (MemoryRequirements.MaxSizeInBytes > 0)
+			{
+				D3D12_HEAP_PROPERTIES HeapProperties = { 0 };
+				HeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+				HeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+				HeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+
+				D3D12_RESOURCE_DESC1 ResourceDesc = { 0 };
+				ResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+				ResourceDesc.Alignment = 0;
+				ResourceDesc.Width = MemoryRequirements.MaxSizeInBytes;
+				ResourceDesc.Height = 1;
+				ResourceDesc.DepthOrArraySize = 1;
+				ResourceDesc.MipLevels = 1;
+				ResourceDesc.Format = DXGI_FORMAT_UNKNOWN;
+				ResourceDesc.SampleDesc.Count = 1;
+				ResourceDesc.SampleDesc.Quality = 0;
+				ResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+				ResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+				THROW_ON_FAIL(ID3D12Device10_CreateCommittedResource3(
+					Device,
+					&HeapProperties,
+					D3D12_HEAP_FLAG_NONE,
+					&ResourceDesc,
+					D3D12_BARRIER_LAYOUT_UNDEFINED,
+					NULL,
+					NULL,
+					0,
+					NULL,
+					&IID_ID3D12Resource,
+					&BackingMemoryResource[i][j]));
+
+				DxObjects.BackingMemoryGpuAddresses[i][j] = ID3D12Resource_GetGPUVirtualAddress(BackingMemoryResource[i][j]);
+			}
+
+			DxObjects.ScratchSizeInBytes[i][j] = MemoryRequirements.MaxSizeInBytes;
 		}
 	}
 
@@ -575,7 +658,7 @@ int main()
 		.hwnd = Window,
 		.message = WM_SIZE,
 		.wParam = SIZE_RESTORED,
-		.lParam = MAKELONG(WindowWidth, WindowHeight)
+		.lParam = MAKELONG(WindowRect.right - WindowRect.left, WindowRect.bottom - WindowRect.top)
 	});
 
 	MSG Message = { 0 };
@@ -591,6 +674,14 @@ int main()
 
 	WaitForPreviousFrame(&DxObjects);
 
+	for (int i = 0; i < FRACTAL_SET_COUNT; i++)
+	{
+		for (int j = 0; j < FRACTAL_TYPE_COUNT; j++)
+		{
+			THROW_ON_FAIL(ID3D12Resource_Release(BackingMemoryResource[i][j]));
+		}
+	}
+
 	for (int i = 0; i < BUFFER_COUNT; i++)
 	{
 		ID3D12Resource_Unmap(StationaryConstantBuffer[i], 0, NULL);
@@ -602,8 +693,8 @@ int main()
 
 	for (int i = 0; i < FRACTAL_SET_COUNT; i++)
 	{
-		THROW_ON_FAIL(ID3D12PipelineState_Release(DxObjects.PipelineStates[i][FRACTAL_TYPE_BASE]));
-		THROW_ON_FAIL(ID3D12PipelineState_Release(DxObjects.PipelineStates[i][FRACTAL_TYPE_JULIA]));
+		THROW_ON_FAIL(ID3D12PipelineState_Release(StateObjects[i][FRACTAL_TYPE_BASE]));
+		THROW_ON_FAIL(ID3D12PipelineState_Release(StateObjects[i][FRACTAL_TYPE_JULIA]));
 	}
 
 	THROW_ON_FAIL(ID3D12RootSignature_Release(DxObjects.RootSignatures[RENDER_MODE_BASE]));
@@ -631,11 +722,11 @@ int main()
 		THROW_ON_FAIL(ID3D12Fence_Release(DxObjects.AllClearFence[i]));
 	}
 
-	THROW_ON_FAIL(ID3D12GraphicsCommandList7_Release(DxObjects.DirectCommandList));
+	THROW_ON_FAIL(ID3D12GraphicsCommandList10_Release(DxObjects.DirectCommandList));
 	THROW_ON_FAIL(ID3D12CommandAllocator_Release(DxObjects.DirectCommandAllocator));
 	THROW_ON_FAIL(ID3D12CommandQueue_Release(DxObjects.DirectCommandQueue));
 
-	THROW_ON_FAIL(ID3D12GraphicsCommandList7_Release(DxObjects.ComputeCommandList));
+	THROW_ON_FAIL(ID3D12GraphicsCommandList10_Release(DxObjects.ComputeCommandList));
 	THROW_ON_FAIL(ID3D12CommandAllocator_Release(DxObjects.ComputeCommandAllocator));
 	THROW_ON_FAIL(ID3D12CommandQueue_Release(DxObjects.ComputeCommandQueue));
 
@@ -653,16 +744,16 @@ int main()
 	THROW_ON_FAIL(ID3D12Debug6_Release(DebugController));
 #endif
 
-	THROW_ON_FALSE(UnregisterClassW(WindowClassName, Instance));
+	THROW_ON_FALSE(UnregisterClassW(WindowClass.lpszClassName, Instance));
 
 	THROW_ON_FALSE(DestroyCursor(Cursor));
 	THROW_ON_FALSE(DestroyIcon(Icon));
 
 #ifdef _DEBUG
 	{
-		IDXGIDebug1* dxgiDebug;
-		THROW_ON_FAIL(DXGIGetDebugInterface1(0, &IID_IDXGIDebug1, &dxgiDebug));
-		THROW_ON_FAIL(IDXGIDebug1_ReportLiveObjects(dxgiDebug, DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_SUMMARY | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
+		IDXGIDebug1* DxgiDebug;
+		THROW_ON_FAIL(DXGIGetDebugInterface1(0, &IID_IDXGIDebug1, &DxgiDebug));
+		THROW_ON_FAIL(IDXGIDebug1_ReportLiveObjects(DxgiDebug, DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_SUMMARY | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
 	}
 #endif
 	return 0;
@@ -718,7 +809,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 	static LONGLONG TickCount = 0;
 
 	static bool bFullScreen = false;
-	static bool bVsync = false;
+	static bool bVsync = true;
 
 	static enum RenderMode CurrentRenderMode = RENDER_MODE_BASE;
 	static enum FractalSet CurrentFractalSet = FRACTAL_SET_MANDELBROT;
@@ -968,10 +1059,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 		ID3D12DescriptorHeap_GetCPUDescriptorHandleForHeapStart(DxObjects->DescriptorHeap, &CpuDescriptorHandle);
 
 		ID3D12Device10_CreateUnorderedAccessView(Device, DxObjects->MinimapFrameBuffer, NULL, NULL, CpuDescriptorHandle);
-		CpuDescriptorHandle.ptr += DxObjects->cbvDescriptorSize;
+		CpuDescriptorHandle.ptr += DxObjects->CbvDescriptorSize;
 
 		ID3D12Device10_CreateUnorderedAccessView(Device, DxObjects->MainFrameBuffer, NULL, NULL, CpuDescriptorHandle);
-		CpuDescriptorHandle.ptr += DxObjects->cbvDescriptorSize;
+		CpuDescriptorHandle.ptr += DxObjects->CbvDescriptorSize;
 
 		//minimap
 		{
@@ -988,7 +1079,7 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 				CpuDescriptorHandle
 			);
 		}
-		CpuDescriptorHandle.ptr += DxObjects->cbvDescriptorSize;
+		CpuDescriptorHandle.ptr += DxObjects->CbvDescriptorSize;
 	}
 	break;
 	case WM_PAINT:
@@ -1002,10 +1093,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 		TickCount = TickCountNow;
 
 		THROW_ON_FAIL(ID3D12CommandAllocator_Reset(DxObjects->DirectCommandAllocator));
-		THROW_ON_FAIL(ID3D12GraphicsCommandList7_Reset(DxObjects->DirectCommandList, DxObjects->DirectCommandAllocator, NULL));
+		THROW_ON_FAIL(ID3D12GraphicsCommandList10_Reset(DxObjects->DirectCommandList, DxObjects->DirectCommandAllocator, NULL));
 
 		THROW_ON_FAIL(ID3D12CommandAllocator_Reset(DxObjects->ComputeCommandAllocator));
-		THROW_ON_FAIL(ID3D12GraphicsCommandList7_Reset(DxObjects->ComputeCommandList, DxObjects->ComputeCommandAllocator, NULL));
+		THROW_ON_FAIL(ID3D12GraphicsCommandList10_Reset(DxObjects->ComputeCommandList, DxObjects->ComputeCommandAllocator, NULL));
 
 		if (up || down || left || right || in || out || mouseClicked)
 		{
@@ -1058,17 +1149,35 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 		D3D12_GPU_DESCRIPTOR_HANDLE GpuDescriptorHandle = DxObjects->GpuDescriptorHandle;
 		if (CurrentRenderMode == RENDER_MODE_BASE)
 		{
-			ID3D12GraphicsCommandList7_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_JULIA]);
-			ID3D12GraphicsCommandList7_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
+			ID3D12GraphicsCommandList10_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_JULIA]);
+			ID3D12GraphicsCommandList10_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
 
-			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->StationaryConstantBufferPtr[DxObjects->FrameIndex]);
+			ID3D12GraphicsCommandList10_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->StationaryConstantBufferPtr[DxObjects->FrameIndex]);
 			
 			//render julia to Minimap
-			ID3D12GraphicsCommandList7_SetPipelineState(DxObjects->ComputeCommandList, DxObjects->PipelineStates[CurrentFractalSet][FRACTAL_TYPE_JULIA]);
+			ID3D12GraphicsCommandList10_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 0, GpuDescriptorHandle);
 
-			ID3D12GraphicsCommandList7_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 0, GpuDescriptorHandle);
+			{
+				D3D12_SET_PROGRAM_DESC SetProgramDesc = { 0 };
+				SetProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
+				SetProgramDesc.WorkGraph.ProgramIdentifier = DxObjects->ProgramIdentifiers[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+				SetProgramDesc.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE;
+				if (DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA] > 0)
+				{
+					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+				}
 
-			ID3D12GraphicsCommandList7_Dispatch(DxObjects->ComputeCommandList, (WindowWidth + 32 - 1) / 32, (WindowHeight + 32 - 1) / 32, 1);
+				ID3D12GraphicsCommandList10_SetProgram(DxObjects->ComputeCommandList, &SetProgramDesc);
+			}
+
+			{
+				D3D12_DISPATCH_GRAPH_DESC DispatchGraphDesc = { 0 };
+				DispatchGraphDesc.Mode = D3D12_DISPATCH_MODE_NODE_CPU_INPUT;
+				DispatchGraphDesc.NodeCPUInput.EntrypointIndex = 0;
+				DispatchGraphDesc.NodeCPUInput.NumRecords = 1;
+				ID3D12GraphicsCommandList10_DispatchGraph(DxObjects->ComputeCommandList, &DispatchGraphDesc);
+			}
 
 			{
 				D3D12_TEXTURE_BARRIER TextureBarrier = { 0 };
@@ -1085,24 +1194,43 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 				ResourceBarrier.Type = D3D12_BARRIER_TYPE_TEXTURE;
 				ResourceBarrier.NumBarriers = 1;
 				ResourceBarrier.pTextureBarriers = &TextureBarrier;
-				ID3D12GraphicsCommandList7_Barrier(DxObjects->ComputeCommandList, 1, &ResourceBarrier);
+				ID3D12GraphicsCommandList10_Barrier(DxObjects->ComputeCommandList, 1, &ResourceBarrier);
 			}
 
 			//render mandelbrot
-			ID3D12GraphicsCommandList7_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_BASE]);
+			ID3D12GraphicsCommandList10_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_BASE]);
 
-			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[DxObjects->FrameIndex]);
+			ID3D12GraphicsCommandList10_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[DxObjects->FrameIndex]);
 
-			ID3D12GraphicsCommandList7_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
-			ID3D12GraphicsCommandList7_SetPipelineState(DxObjects->ComputeCommandList, DxObjects->PipelineStates[CurrentFractalSet][FRACTAL_TYPE_BASE]);
-			GpuDescriptorHandle.ptr += DxObjects->cbvDescriptorSize;
-			ID3D12GraphicsCommandList7_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 0, GpuDescriptorHandle);
+			ID3D12GraphicsCommandList10_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
+			GpuDescriptorHandle.ptr += DxObjects->CbvDescriptorSize;
+			ID3D12GraphicsCommandList10_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 0, GpuDescriptorHandle);
 
 			//set the original julia as a texture input
-			GpuDescriptorHandle.ptr += DxObjects->cbvDescriptorSize;
-			ID3D12GraphicsCommandList7_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 2, GpuDescriptorHandle);
+			GpuDescriptorHandle.ptr += DxObjects->CbvDescriptorSize;
+			ID3D12GraphicsCommandList10_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 2, GpuDescriptorHandle);
 
-			ID3D12GraphicsCommandList7_Dispatch(DxObjects->ComputeCommandList, (WindowWidth + 32 - 1) / 32, (WindowHeight + 32 - 1) / 32, 1);
+			{
+				D3D12_SET_PROGRAM_DESC SetProgramDesc = { 0 };
+				SetProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
+				SetProgramDesc.WorkGraph.ProgramIdentifier = DxObjects->ProgramIdentifiers[CurrentFractalSet][FRACTAL_TYPE_BASE];
+				SetProgramDesc.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE;
+				if (DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_BASE] > 0)
+				{
+					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[CurrentFractalSet][FRACTAL_TYPE_BASE];
+					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_BASE];
+				}
+
+				ID3D12GraphicsCommandList10_SetProgram(DxObjects->ComputeCommandList, &SetProgramDesc);
+			}
+
+			{
+				D3D12_DISPATCH_GRAPH_DESC DispatchGraphDesc = { 0 };
+				DispatchGraphDesc.Mode = D3D12_DISPATCH_MODE_NODE_CPU_INPUT;
+				DispatchGraphDesc.NodeCPUInput.EntrypointIndex = 0;
+				DispatchGraphDesc.NodeCPUInput.NumRecords = 1;
+				ID3D12GraphicsCommandList10_DispatchGraph(DxObjects->ComputeCommandList, &DispatchGraphDesc);
+			}
 
 			{
 				D3D12_TEXTURE_BARRIER TextureBarriers[2] = { 0 };
@@ -1128,24 +1256,43 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 				ResourceBarrier.Type = D3D12_BARRIER_TYPE_TEXTURE;
 				ResourceBarrier.NumBarriers = 2;
 				ResourceBarrier.pTextureBarriers = TextureBarriers;
-				ID3D12GraphicsCommandList7_Barrier(DxObjects->ComputeCommandList, 1, &ResourceBarrier);
+				ID3D12GraphicsCommandList10_Barrier(DxObjects->ComputeCommandList, 1, &ResourceBarrier);
 			}
 		}
 		else//render mode julia (no minimap)
 		{
-			ID3D12GraphicsCommandList7_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_JULIA]);
-			ID3D12GraphicsCommandList7_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
+			ID3D12GraphicsCommandList10_SetComputeRootSignature(DxObjects->ComputeCommandList, DxObjects->RootSignatures[RENDER_MODE_JULIA]);
+			ID3D12GraphicsCommandList10_SetDescriptorHeaps(DxObjects->ComputeCommandList, 1, &DxObjects->DescriptorHeap);
 
-			ID3D12GraphicsCommandList7_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[DxObjects->FrameIndex]);
+			ID3D12GraphicsCommandList10_SetComputeRootConstantBufferView(DxObjects->ComputeCommandList, 1, DxObjects->MovableConstantBufferPtr[DxObjects->FrameIndex]);
 
-			GpuDescriptorHandle.ptr += DxObjects->cbvDescriptorSize;
+			GpuDescriptorHandle.ptr += DxObjects->CbvDescriptorSize;
 
-			ID3D12GraphicsCommandList7_SetPipelineState(DxObjects->ComputeCommandList, DxObjects->PipelineStates[CurrentFractalSet][FRACTAL_TYPE_JULIA]);
 
-			ID3D12GraphicsCommandList7_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 0, GpuDescriptorHandle);
+			ID3D12GraphicsCommandList10_SetComputeRootDescriptorTable(DxObjects->ComputeCommandList, 0, GpuDescriptorHandle);
 
-			ID3D12GraphicsCommandList7_Dispatch(DxObjects->ComputeCommandList, (WindowWidth + 32 - 1) / 32, (WindowHeight + 32 - 1) / 32, 1);
-			
+			{
+				D3D12_SET_PROGRAM_DESC SetProgramDesc = { 0 };
+				SetProgramDesc.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
+				SetProgramDesc.WorkGraph.ProgramIdentifier = DxObjects->ProgramIdentifiers[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+				SetProgramDesc.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE;
+				if (DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA] > 0)
+				{
+					SetProgramDesc.WorkGraph.BackingMemory.StartAddress = DxObjects->BackingMemoryGpuAddresses[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+					SetProgramDesc.WorkGraph.BackingMemory.SizeInBytes = DxObjects->ScratchSizeInBytes[CurrentFractalSet][FRACTAL_TYPE_JULIA];
+				}
+
+				ID3D12GraphicsCommandList10_SetProgram(DxObjects->ComputeCommandList, &SetProgramDesc);
+			}
+
+			{
+				D3D12_DISPATCH_GRAPH_DESC DispatchGraphDesc = { 0 };
+				DispatchGraphDesc.Mode = D3D12_DISPATCH_MODE_NODE_CPU_INPUT;
+				DispatchGraphDesc.NodeCPUInput.EntrypointIndex = 0;
+				DispatchGraphDesc.NodeCPUInput.NumRecords = 1;
+				ID3D12GraphicsCommandList10_DispatchGraph(DxObjects->ComputeCommandList, &DispatchGraphDesc);
+			}
+
 			{
 				D3D12_TEXTURE_BARRIER TextureBarrier = { 0 };
 				TextureBarrier.SyncBefore = D3D12_BARRIER_SYNC_COMPUTE_SHADING;
@@ -1161,11 +1308,11 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 				ResourceBarrier.Type = D3D12_BARRIER_TYPE_TEXTURE;
 				ResourceBarrier.NumBarriers = 1;
 				ResourceBarrier.pTextureBarriers = &TextureBarrier;
-				ID3D12GraphicsCommandList7_Barrier(DxObjects->ComputeCommandList, 1, &ResourceBarrier);
+				ID3D12GraphicsCommandList10_Barrier(DxObjects->ComputeCommandList, 1, &ResourceBarrier);
 			}
 		}
 
-		THROW_ON_FAIL(ID3D12GraphicsCommandList7_Close(DxObjects->ComputeCommandList));
+		THROW_ON_FAIL(ID3D12GraphicsCommandList10_Close(DxObjects->ComputeCommandList));
 
 		ID3D12CommandQueue_ExecuteCommandLists(DxObjects->ComputeCommandQueue, 1, &DxObjects->ComputeCommandList);
 		
@@ -1187,10 +1334,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			ResourceBarrier.Type = D3D12_BARRIER_TYPE_TEXTURE;
 			ResourceBarrier.NumBarriers = 1;
 			ResourceBarrier.pTextureBarriers = &TextureBarrier;
-			ID3D12GraphicsCommandList7_Barrier(DxObjects->DirectCommandList, 1, &ResourceBarrier);
+			ID3D12GraphicsCommandList10_Barrier(DxObjects->DirectCommandList, 1, &ResourceBarrier);
 		}
 
-		ID3D12GraphicsCommandList7_CopyResource(DxObjects->DirectCommandList, DxObjects->SwapchainBuffers[DxObjects->FrameIndex], DxObjects->MainFrameBuffer);
+		ID3D12GraphicsCommandList10_CopyResource(DxObjects->DirectCommandList, DxObjects->SwapchainBuffers[DxObjects->FrameIndex], DxObjects->MainFrameBuffer);
 
 		{
 			D3D12_TEXTURE_BARRIER TextureBarriers[2] = { 0 };
@@ -1216,10 +1363,10 @@ LRESULT CALLBACK WndProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam
 			ResourceBarrier.Type = D3D12_BARRIER_TYPE_TEXTURE;
 			ResourceBarrier.NumBarriers = 2;
 			ResourceBarrier.pTextureBarriers = TextureBarriers;
-			ID3D12GraphicsCommandList7_Barrier(DxObjects->DirectCommandList, 1, &ResourceBarrier);
+			ID3D12GraphicsCommandList10_Barrier(DxObjects->DirectCommandList, 1, &ResourceBarrier);
 		}
 
-		THROW_ON_FAIL(ID3D12GraphicsCommandList7_Close(DxObjects->DirectCommandList));
+		THROW_ON_FAIL(ID3D12GraphicsCommandList10_Close(DxObjects->DirectCommandList));
 
 		ID3D12CommandQueue_ExecuteCommandLists(DxObjects->DirectCommandQueue, 1, &DxObjects->DirectCommandList);
 

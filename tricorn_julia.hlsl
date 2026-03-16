@@ -1,5 +1,5 @@
 /*
-* (C) 2024 badasahog. All Rights Reserved
+* (C) 2024-2026 badasahog. All Rights Reserved
 * 
 * The above copyright notice shall be included in
 * all copies or substantial portions of the Software.
@@ -20,18 +20,18 @@ struct ConstantBufferData
     float4 JuliaPos;
 };
 
-RWTexture2D<float4> framebuffer : register(u0);
-ConstantBuffer<ConstantBufferData> cb : register(b0, space0);
+RWTexture2D<float4> Framebuffer : register(u0);
+ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 
 float2 ComplexSquareConjugate(float2 z)
 {
     return float2(z.x * z.x - z.y * z.y, -2.0 * z.x * z.y);
 }
 
-float julia(float2 z)
+float Julia(float2 z)
 {
-    uint maxiter = (uint) cb.MaxIterations.z * 4;
-    float2 c = cb.JuliaPos.xy;
+    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
+    float2 c = MyConstantBuffer.JuliaPos.xy;
     
     
     for (int i = 0; i < maxiter; i++)
@@ -45,14 +45,41 @@ float julia(float2 z)
     return 0.0;
 }
 
-[numthreads(32, 32, 1)]
-void main(uint3 DTid : SV_DispatchThreadID)
+struct BroadcastPayload
 {
-    float2 WindowLocal = ((float2) DTid.xy / cb.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
-    float2 coord = WindowLocal.xy * cb.WindowPos.xy + cb.WindowPos.zw;
+    uint2 DispatchGrid : SV_DispatchGrid;
+};
 
-    float colorIndex = julia(coord);
+[Shader("node")]
+[NodeIsProgramEntry]
+[NodeLaunch("thread")]
+[NodeId("Entry")]
+void main(
+    [MaxRecords(1)]
+	[NodeId("MyConsumer")]
+    NodeOutput<BroadcastPayload> MyConsumer
+)
+{
+    ThreadNodeOutputRecords<BroadcastPayload> outputRecord = MyConsumer.GetThreadNodeOutputRecords(1);
+	outputRecord.Get().DispatchGrid = float2(MyConstantBuffer.MaxIterations.x, MyConstantBuffer.MaxIterations.y) / 8;
+	outputRecord.OutputComplete();
+}
+
+[Shader("node")]
+[NodeLaunch("broadcasting")]
+[NodeMaxDispatchGrid(1024, 1024, 1)]
+[NumThreads(8, 8, 1)]
+[NodeID("MyConsumer")]
+void myConsumer(
+    uint3 DTid : SV_DispatchThreadID,
+    DispatchNodeInputRecord<BroadcastPayload> InputRecord
+)
+{
+    float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
+    float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+
+    float ColorIndex = Julia(Coord);
     
-    framebuffer[DTid.xy] = float4(frac(colorIndex * 1), frac(colorIndex * 3), frac(colorIndex * 5), 0);
+    Framebuffer[DTid.xy] = float4(frac(ColorIndex * 1), frac(ColorIndex * 3), frac(ColorIndex * 5), 0);
     
 }
