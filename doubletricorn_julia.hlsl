@@ -23,29 +23,30 @@ struct ConstantBufferData
 RWTexture2D<float4> Framebuffer : register(u0);
 ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 
-float Julia(float2 coord)
+float Julia(float2 Coord)
 {
-    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
+    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z * 4;
     uint iter = 0;
 
-    float2 z = coord;
+    float2 z = Coord;
     float2 c = MyConstantBuffer.JuliaPos.xy;
 
-    while (iter < maxiter && dot(z, z) < 4.0)
+    while (iter < MaxIterations && dot(z, z) < 4.0)
     {
         // Burning-ship style folding
-        z = abs(z);
+        z = abs(z); // fold across both axes
 
         // z^2
         float x2 = z.x * z.x;
         float y2 = z.y * z.y;
 
-        // z^3
+        // z^3 in complex form:
+        // (x^3 - 3xy^2, 3x^2y - y^3)
         float2 z3;
         z3.x = z.x * (x2 - 3.0 * y2);
         z3.y = z.y * (3.0 * x2 - y2);
 
-        // Same skew as base
+        // Slight skew to make it less symmetric
         z3.x += 0.2 * z3.y;
 
         z = z3 + c;
@@ -86,9 +87,10 @@ void myConsumer(
 )
 {
 	float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
-	float2 coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+	float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+    Coord *= float2(1, -1);
 
-	float colorIndex = Julia(coord);
+	float colorIndex = Julia(Coord);
 	
 	Framebuffer[DTid.xy] = float4(frac(colorIndex * 1), frac(colorIndex * 3), frac(colorIndex * 5), 0);
 }

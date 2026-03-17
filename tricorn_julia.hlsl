@@ -28,20 +28,23 @@ float2 ComplexSquareConjugate(float2 z)
     return float2(z.x * z.x - z.y * z.y, -2.0 * z.x * z.y);
 }
 
-float Julia(float2 z)
+float Julia(float2 Coord)
 {
-    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
+    uint MaxIterations = (uint)MyConstantBuffer.MaxIterations.z * 4;
+    uint iter = 0;
+    
+    float2 z = Coord;
     float2 c = MyConstantBuffer.JuliaPos.xy;
     
-    for (int i = 0; i < maxiter; i++)
+    while (iter < MaxIterations && dot(z, z) < 4.0f)
     {
-        z = ComplexSquareConjugate(z) + c;
-        if (dot(z, z) > 4.0)
-        {
-            return float(i) / maxiter;
-        }
+        float x = z.x * z.x - z.y * z.y;
+        float y = -2.0f * z.x * z.y;
+        z = float2(x, y) + c;
+        iter++;
     }
-    return 0.0;
+    
+    return frac((float)iter / MyConstantBuffer.MaxIterations.z);
 }
 
 struct BroadcastPayload
@@ -76,6 +79,7 @@ void myConsumer(
 {
     float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
     float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+    Coord *= float2(1, -1);
 
     float ColorIndex = Julia(Coord);
     

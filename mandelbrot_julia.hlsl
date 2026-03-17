@@ -23,12 +23,12 @@ struct ConstantBufferData
 RWTexture2D<float4> Framebuffer : register(u0);
 ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 
-float Julia(float2 coord)
+float Julia(float2 Coord)
 {
     uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z * 4;
     uint iter = 0;
     
-    float2 z = coord;
+    float2 z = Coord;
     float2 c = MyConstantBuffer.JuliaPos.xy;
     
     while (iter < MaxIterations && dot(z, z) < 4.0)
@@ -72,8 +72,9 @@ void myConsumer(
 {
     float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
     float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+    Coord *= float2(1, -1);
 
-float ColorIndex = Julia(Coord);
+    float ColorIndex = Julia(Coord);
     
     Framebuffer[DTid.xy] = float4(frac(ColorIndex * 1), frac(ColorIndex * 3), frac(ColorIndex * 5), 0);
 }

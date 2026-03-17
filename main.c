@@ -279,11 +279,6 @@ int main()
 	}
 
 	THROW_ON_FAIL(D3D12CreateDevice(Adapter, D3D_FEATURE_LEVEL_12_2, &IID_ID3D12Device10, &Device));
-
-	struct DxObjects DxObjects = { 0 };
-
-	DxObjects.CbvDescriptorSize = ID3D12Device10_GetDescriptorHandleIncrementSize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
 #ifdef _DEBUG
 	ID3D12InfoQueue* InfoQueue;
 	THROW_ON_FAIL(ID3D12Device10_QueryInterface(Device, &IID_ID3D12InfoQueue, &InfoQueue));
@@ -292,6 +287,10 @@ int main()
 	THROW_ON_FAIL(ID3D12InfoQueue_SetBreakOnSeverity(InfoQueue, D3D12_MESSAGE_SEVERITY_ERROR, TRUE));
 	THROW_ON_FAIL(ID3D12InfoQueue_SetBreakOnSeverity(InfoQueue, D3D12_MESSAGE_SEVERITY_WARNING, TRUE));
 #endif
+
+	struct DxObjects DxObjects = { 0 };
+
+	DxObjects.CbvDescriptorSize = ID3D12Device10_GetDescriptorHandleIncrementSize(Device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
 	{
 		D3D12_DESCRIPTOR_HEAP_DESC DescriptorHeapDesc = { 0 };

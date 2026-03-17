@@ -25,22 +25,20 @@ Texture2D Texture : register(t0);
 ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 SamplerState MySampler : register(s0);
 
-float Mandelbrot(float2 coord)
+float Mandelbrot(float2 Coord)
 {
-    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
+    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z * 4;
     uint iter = 0;
-    float2 constant = coord;
-    float2 sq;
-    do
+    
+    float2 z = Coord;
+    float2 c = Coord;
+    
+    while (iter < MaxIterations && dot(z, z) < 4.0)
     {
-        float2 newvalue;
-        sq = coord * coord;
-        newvalue.x = sq.x - sq.y;
-        newvalue.y = 2 * coord.y * coord.x;
-        coord = newvalue + constant;
+        z = float2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
         iter++;
-    } while (iter < maxiter && (sq.x + sq.y) < 4.0);
-
+    }
+    
     return frac((float) iter / MyConstantBuffer.MaxIterations.z);
 }
 
@@ -87,6 +85,7 @@ void myConsumer(
     {
         float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
         float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+        Coord *= float2(1, -1);
         
         float ColorIndex = Mandelbrot(Coord);
         Framebuffer[DTid.xy] = float4(frac(ColorIndex * 1), frac(ColorIndex * 3), frac(ColorIndex * 5), 0);

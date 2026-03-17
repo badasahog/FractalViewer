@@ -27,26 +27,22 @@ SamplerState MySampler : register(s0);
 
 float Burningship(float2 coord)
 {
-    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
-    float iter = 0;
-    float2 c = (coord - 0.5) * 3.0 - float2(0.5, 0.5);
-    float2 z = c;
-    float escapeRadius = 4.0;
+    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z;
+    uint iter = 0;
+    
+    float2 z = coord;
+    float2 c = coord;
 
-    for (int i = 0; i < maxiter; i++)
+    while (iter < MaxIterations && dot(z, z) < 4.0)
     {
-        z = float2(abs(z.x), abs(z.y));
-        z = float2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
-        if (dot(z, z) > escapeRadius)
-        {
-            break;
-        }
+        float xtemp = z.x * z.x - z.y * z.y + c.x;
+        z.y = 2.0 * abs(z.x * z.y) + c.y;
+        z.x = xtemp;
         iter++;
     }
     
-    return frac((float) iter / maxiter);
+    return frac((float) iter / MyConstantBuffer.MaxIterations.z);
 }
-
 
 struct BroadcastPayload
 {
@@ -90,9 +86,10 @@ void myConsumer(
     else
     {
         float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
-        float2 coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
-        
-        float ColorIndex = Burningship(coord);
+        float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+        Coord *= float2(1, -1);
+
+        float ColorIndex = Burningship(Coord);
         Framebuffer[DTid.xy] = float4(frac(ColorIndex * 1), frac(ColorIndex * 3), frac(ColorIndex * 5), 0);
     }
 }

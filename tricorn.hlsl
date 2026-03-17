@@ -25,25 +25,23 @@ Texture2D Texture : register(t0);
 ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 SamplerState MySampler : register(s0);
 
-float2 ComplexSquareConjugate(float2 z)
+float Tricorn(float2 Coord)
 {
-	return float2(z.x * z.x - z.y * z.y, -2.0 * z.x * z.y);
-}
-
-float Tricorn(float2 c)
-{
-    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z * 4;
-	
-	float2 z = c;
-    for (int i = 0; i < MaxIterations; i++)
-	{
-		z = ComplexSquareConjugate(z) + c;
-		if (dot(z, z) > 4.0)
-		{
-            return float(i) / MaxIterations;
-        }
-	}
-	return 0.0;
+    uint MaxIterations = (uint)MyConstantBuffer.MaxIterations.z * 4;
+    uint iter = 0;
+    
+    float2 z = Coord;
+    float2 c = Coord;
+    
+    while (iter < MaxIterations && dot(z, z) < 4.0f)
+    {
+        float x = z.x * z.x - z.y * z.y;
+        float y = -2.0f * z.x * z.y;
+        z = float2(x, y) + c;
+        iter++;
+    }
+    
+    return frac((float)iter / MyConstantBuffer.MaxIterations.z);
 }
 
 struct BroadcastPayload
@@ -89,6 +87,7 @@ void myConsumer(
 	{
 		float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
 		float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+        Coord *= float2(1, -1);
 		
 		float ColorIndex = Tricorn(Coord);
 		Framebuffer[DTid.xy] = float4(frac(ColorIndex * 1), frac(ColorIndex * 3), frac(ColorIndex * 5), 0);

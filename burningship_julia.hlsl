@@ -25,24 +25,20 @@ ConstantBuffer<ConstantBufferData> MyConstantBuffer : register(b0, space0);
 
 float Julia(float2 coord)
 {
-    uint maxiter = (uint) MyConstantBuffer.MaxIterations.z * 4;
-	float iter = 0;
-	
-	
-	float2 z = (coord - 0.5) * 3.0;
+    uint MaxIterations = (uint) MyConstantBuffer.MaxIterations.z;
+    uint iter = 0;
+    
+    float2 z = coord;
     float2 c = MyConstantBuffer.JuliaPos.xy;
-	float escapeRadius = 4.0;
 
-	for (int i = 0; i < maxiter; i++)
-	{
-		z = float2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
-		if (dot(z, z) > escapeRadius)
-		{
-			break;
-		}
-		iter++;
-	}
-	
+    while (iter < MaxIterations && dot(z, z) < 4.0)
+    {
+        float xtemp = z.x * z.x - z.y * z.y + c.x;
+        z.y = 2.0 * abs(z.x * z.y) + c.y;
+        z.x = xtemp;
+        iter++;
+    }
+    
     return frac((float) iter / MyConstantBuffer.MaxIterations.z);
 }
 
@@ -78,6 +74,7 @@ void myConsumer(
 {
 	float2 WindowLocal = ((float2) DTid.xy / MyConstantBuffer.MaxIterations.xy) * float2(1, -1) + float2(-0.5f, 0.5f);
 	float2 Coord = WindowLocal.xy * MyConstantBuffer.WindowPos.xy + MyConstantBuffer.WindowPos.zw;
+    Coord *= float2(1, -1);
 
 	float ColorIndex = Julia(Coord);
 	
